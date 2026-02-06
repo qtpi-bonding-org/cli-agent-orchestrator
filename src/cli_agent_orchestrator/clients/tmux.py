@@ -20,7 +20,9 @@ class TmuxClient:
     """Simplified tmux client for basic operations."""
 
     def __init__(self) -> None:
-        self.server = libtmux.Server()
+        # POCKETCODER INTEGRATION: Use shared socket
+        socket_path = os.environ.get("TMUX_SOCKET", "/tmp/tmux/pocketcoder")
+        self.server = libtmux.Server(socket_path=socket_path)
 
     def _resolve_and_validate_working_directory(self, working_directory: Optional[str]) -> str:
         """Resolve and validate working directory.

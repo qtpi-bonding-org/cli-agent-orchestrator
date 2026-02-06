@@ -117,6 +117,18 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
+# --- PocketCoder Integration ---
+# Mount the CAO MCP Server as an SSE endpoint so external OpenCode agents can access toolset
+try:
+    from cli_agent_orchestrator.mcp_server.server import mcp
+    # Mount the FastMCP Internal FastAPI App
+    # This exposes /sse and /message endpoints
+    app.mount("/mcp", mcp._fastapi_app)
+    logger.info("✅ Mounted CAO MCP Server at /mcp (SSE Endpoint: /mcp/sse)")
+except Exception as e:
+    logger.error(f"❌ Failed to mount CAO MCP Server: {e}")
+# -------------------------------
+
 
 @app.get("/health")
 async def health_check():
