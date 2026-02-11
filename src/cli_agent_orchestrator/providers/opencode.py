@@ -1,4 +1,6 @@
-"""OpenCode provider implementation."""
+"""OpenCode provider implementation.
+@pocketcoder-core: OpenCode Provider. Custom extension to sync CAO with OpenCode events.
+"""
 
 import logging
 import json
