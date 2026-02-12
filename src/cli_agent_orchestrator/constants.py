@@ -9,7 +9,7 @@ SESSION_PREFIX = "cao-"
 
 # Available providers (derived from enum)
 PROVIDERS = [p.value for p in ProviderType]
-DEFAULT_PROVIDER = ProviderType.Q_CLI.value
+DEFAULT_PROVIDER = ProviderType.OPENCODE.value
 
 # Tmux capture limits
 TMUX_HISTORY_LINES = 200
@@ -43,9 +43,11 @@ KIRO_AGENTS_DIR = Path.home() / ".kiro" / "agents"
 DATABASE_FILE = DB_DIR / "cli-agent-orchestrator.db"
 DATABASE_URL = f"sqlite:///{DATABASE_FILE}"
 
+import os
+
 # Server configuration
-SERVER_HOST = "localhost"
-SERVER_PORT = 9889
+SERVER_HOST = os.environ.get("CAO_SERVER_HOST", "localhost")
+SERVER_PORT = int(os.environ.get("CAO_SERVER_PORT", 9889))
 SERVER_VERSION = "0.1.0"
-API_BASE_URL = f"http://{SERVER_HOST}:{SERVER_PORT}"
+API_BASE_URL = os.environ.get("CAO_API_BASE_URL", f"http://{SERVER_HOST}:{SERVER_PORT}")
 CORS_ORIGINS = ["http://localhost:3000", "http://127.0.0.1:3000"]

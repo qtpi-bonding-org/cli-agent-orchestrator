@@ -78,23 +78,25 @@ def wait_until_status(
     return False
 
 
-def wait_until_terminal_status(
+async def wait_until_terminal_status(
     terminal_id: str,
     target_status: TerminalStatus,
     timeout: float = 30.0,
     polling_interval: float = 1.0,
 ) -> bool:
-    """Wait until terminal reaches target status using API endpoint."""
+    """Wait until terminal reaches target status using API endpoint (Async)."""
+    import asyncio
+    import httpx
     start_time = time.time()
     while time.time() - start_time < timeout:
         try:
-            response = httpx.get(f"{API_BASE_URL}/terminals/{terminal_id}", timeout=10.0)
-            logger.info(response)
-            if response.status_code == 200:
-                terminal_data = response.json()
-                if terminal_data["status"] == target_status.value:
-                    return True
+            async with httpx.AsyncClient() as client:
+                response = await client.get(f"{API_BASE_URL}/terminals/{terminal_id}", timeout=10.0)
+                if response.status_code == 200:
+                    terminal_data = response.json()
+                    if terminal_data["status"] == target_status.value:
+                        return True
         except Exception:
             pass
-        time.sleep(polling_interval)
+        await asyncio.sleep(polling_interval)
     return False

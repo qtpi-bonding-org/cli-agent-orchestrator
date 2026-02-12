@@ -164,7 +164,7 @@ async def _handoff_impl(
         terminal_id, provider = _create_terminal(agent_profile, working_directory)
 
         # Wait for terminal to be IDLE before sending message
-        if not wait_until_terminal_status(terminal_id, TerminalStatus.IDLE, timeout=30.0):
+        if not await wait_until_terminal_status(terminal_id, TerminalStatus.IDLE, timeout=30.0):
             return HandoffResult(
                 success=False,
                 message=f"Terminal {terminal_id} did not reach IDLE status within 30 seconds",
@@ -178,7 +178,7 @@ async def _handoff_impl(
         _send_direct_input(terminal_id, message)
 
         # Monitor until completion with timeout
-        if not wait_until_terminal_status(
+        if not await wait_until_terminal_status(
             terminal_id, TerminalStatus.COMPLETED, timeout=timeout, polling_interval=1.0
         ):
             return HandoffResult(

@@ -10,6 +10,10 @@ import libtmux
 
 from cli_agent_orchestrator.constants import TMUX_HISTORY_LINES
 
+# POCKETCODER INTEGRATION: Ensure all tmux calls utilize the shared socket
+if "TMUX_SOCKET" not in os.environ:
+    os.environ["TMUX_SOCKET"] = "/tmp/tmux/pocketcoder"
+
 logger = logging.getLogger(__name__)
 
 
@@ -18,8 +22,8 @@ class TmuxClient:
 
     def __init__(self) -> None:
         # POCKETCODER INTEGRATION: Use shared socket
-        socket_path = os.environ.get("TMUX_SOCKET", "/tmp/tmux/pocketcoder")
-        self.server = libtmux.Server(socket_path=socket_path)
+        self.socket_path = os.environ.get("TMUX_SOCKET", "/tmp/tmux/pocketcoder")
+        self.server = libtmux.Server(socket_path=self.socket_path)
 
     def _resolve_and_validate_working_directory(self, working_directory: Optional[str]) -> str:
         """Resolve and validate working directory.
@@ -121,16 +125,16 @@ class TmuxClient:
         try:
             logger.info(f"send_keys: {target} - keys: {keys}")
             subprocess.run(
-                ["tmux", "load-buffer", "-b", buf_name, "-"],
+                ["tmux", "-S", self.socket_path, "load-buffer", "-b", buf_name, "-"],
                 input=keys.encode(),
                 check=True,
             )
             subprocess.run(
-                ["tmux", "paste-buffer", "-p", "-b", buf_name, "-t", target],
+                ["tmux", "-S", self.socket_path, "paste-buffer", "-p", "-b", buf_name, "-t", target],
                 check=True,
             )
             subprocess.run(
-                ["tmux", "send-keys", "-t", target, "Enter"],
+                ["tmux", "-S", self.socket_path, "send-keys", "-t", target, "Enter"],
                 check=True,
             )
             logger.debug(f"Sent keys to {target}")
@@ -139,37 +143,27 @@ class TmuxClient:
             raise
         finally:
             subprocess.run(
-                ["tmux", "delete-buffer", "-b", buf_name],
+                ["tmux", "-S", self.socket_path, "delete-buffer", "-b", buf_name],
                 check=False,
             )
 
     def get_history(
         self, session_name: str, window_name: str, tail_lines: Optional[int] = None
     ) -> str:
-        """Get window history.
-
-        Args:
-            session_name: Name of tmux session
-            window_name: Name of window in session
-            tail_lines: Number of lines to capture from end (default: TMUX_HISTORY_LINES)
-        """
+        """Get window history using direct tmux command for reliability."""
+        target = f"{session_name}:{window_name}"
         try:
-            session = self.server.sessions.get(session_name=session_name)
-            if not session:
-                raise ValueError(f"Session '{session_name}' not found")
-
-            window = session.windows.get(window_name=window_name)
-            if not window:
-                raise ValueError(f"Window '{window_name}' not found in session '{session_name}'")
-
-            # Use cmd to run capture-pane with -e (escape sequences) and -p (print) flags
-            pane = window.panes[0]
             lines = tail_lines if tail_lines is not None else TMUX_HISTORY_LINES
-            result = pane.cmd("capture-pane", "-e", "-p", "-S", f"-{lines}")
-            # Join all lines with newlines to get complete output
-            return "\n".join(result.stdout) if result.stdout else ""
+            # We use capture-pane directly with -S to ensure correct socket
+            result = subprocess.run(
+                ["tmux", "-S", self.socket_path, "capture-pane", "-e", "-p", "-t", target, "-S", f"-{lines}"],
+                capture_output=True,
+                text=True,
+                check=True
+            )
+            return result.stdout
         except Exception as e:
-            logger.error(f"Failed to get history from {session_name}:{window_name}: {e}")
+            logger.error(f"Failed to get history from {target}: {e}")
             raise
 
     def list_sessions(self) -> List[Dict[str, str]]:
