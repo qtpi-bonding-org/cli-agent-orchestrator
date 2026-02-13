@@ -152,6 +152,23 @@ def _send_to_inbox(receiver_id: str, message: str) -> Dict[str, Any]:
     return response.json()
 
 
+def _notify_brain(session_id: str, event_type: str, payload: Dict[str, Any] = None):
+    """Notify the brain (OpenCode) via Proxy."""
+    try:
+        proxy_url = os.getenv("PROXY_URL", "http://proxy:3001")
+        requests.post(
+            f"{proxy_url}/notify",
+            json={
+                "session_id": session_id,
+                "event_type": event_type,
+                "payload": payload or {}
+            },
+            timeout=2.0
+        )
+    except Exception as e:
+        logger.warning(f"Failed to notify brain: {e}")
+
+
 # Implementation functions
 async def _handoff_impl(
     agent_profile: str, message: str, timeout: int = 600, working_directory: Optional[str] = None
@@ -199,6 +216,9 @@ async def _handoff_impl(
         # Send provider-specific exit command to cleanup terminal
         response = requests.post(f"{API_BASE_URL}/terminals/{terminal_id}/exit")
         response.raise_for_status()
+
+        # NUDGE: Notify the brain that work is done
+        _notify_brain(terminal_id, "handoff_completed", {"terminal_id": terminal_id, "output": output})
 
         execution_time = time.time() - start_time
 
