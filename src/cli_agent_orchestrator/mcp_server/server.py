@@ -121,7 +121,7 @@ def _send_direct_input(terminal_id: str, message: str) -> None:
         Exception: If sending fails
     """
     response = requests.post(
-        f"{API_BASE_URL}/terminals/{terminal_id}/input", params={"message": message}
+        f"{API_BASE_URL}/terminals/{terminal_id}/input", json={"message": message}
     )
     response.raise_for_status()
 
@@ -164,7 +164,7 @@ async def _handoff_impl(
         terminal_id, provider = _create_terminal(agent_profile, working_directory)
 
         # Wait for terminal to be IDLE before sending message
-        if not wait_until_terminal_status(terminal_id, TerminalStatus.IDLE, timeout=30.0):
+        if not await wait_until_terminal_status(terminal_id, TerminalStatus.IDLE, timeout=30.0):
             return HandoffResult(
                 success=False,
                 message=f"Terminal {terminal_id} did not reach IDLE status within 30 seconds",
@@ -178,7 +178,7 @@ async def _handoff_impl(
         _send_direct_input(terminal_id, message)
 
         # Monitor until completion with timeout
-        if not wait_until_terminal_status(
+        if not await wait_until_terminal_status(
             terminal_id, TerminalStatus.COMPLETED, timeout=timeout, polling_interval=1.0
         ):
             return HandoffResult(

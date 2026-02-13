@@ -4,6 +4,7 @@ from abc import ABC, abstractmethod
 from typing import List, Optional
 
 from cli_agent_orchestrator.models.terminal import TerminalStatus
+from cli_agent_orchestrator.clients.tmux import tmux_client
 
 
 class BaseProvider(ABC):
@@ -79,6 +80,14 @@ class BaseProvider(ABC):
     def cleanup(self) -> None:
         """Clean up provider resources."""
         pass
+
+    def send_input(self, message: str) -> None:
+        """Send input to the provider's terminal.
+
+        Default implementation sends raw keys to tmux.
+        Providers can override this to wrap the input (e.g. opencode run ...).
+        """
+        tmux_client.send_keys(self.session_name, self.window_name, message)
 
     def _update_status(self, status: TerminalStatus) -> None:
         """Update internal status."""

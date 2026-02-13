@@ -17,7 +17,9 @@ class TmuxClient:
     """Simplified tmux client for basic operations."""
 
     def __init__(self) -> None:
-        self.server = libtmux.Server()
+        # POCKETCODER: Use shared socket for persistence and external access
+        self.socket_path = os.environ.get("TMUX_SOCKET", "/tmp/tmux/pocketcoder")
+        self.server = libtmux.Server(socket_path=self.socket_path)
 
     def _resolve_and_validate_working_directory(self, working_directory: Optional[str]) -> str:
         """Resolve and validate working directory.
@@ -118,17 +120,18 @@ class TmuxClient:
         buf_name = f"cao_{uuid.uuid4().hex[:8]}"
         try:
             logger.info(f"send_keys: {target} - keys: {keys}")
+            # POCKETCODER: Must explicitly pass socket to subprocess calls that bypass libtmux
             subprocess.run(
-                ["tmux", "load-buffer", "-b", buf_name, "-"],
+                ["tmux", "-S", self.socket_path, "load-buffer", "-b", buf_name, "-"],
                 input=keys.encode(),
                 check=True,
             )
             subprocess.run(
-                ["tmux", "paste-buffer", "-p", "-b", buf_name, "-t", target],
+                ["tmux", "-S", self.socket_path, "paste-buffer", "-p", "-b", buf_name, "-t", target],
                 check=True,
             )
             subprocess.run(
-                ["tmux", "send-keys", "-t", target, "Enter"],
+                ["tmux", "-S", self.socket_path, "send-keys", "-t", target, "Enter"],
                 check=True,
             )
             logger.debug(f"Sent keys to {target}")
@@ -137,7 +140,7 @@ class TmuxClient:
             raise
         finally:
             subprocess.run(
-                ["tmux", "delete-buffer", "-b", buf_name],
+                ["tmux", "-S", self.socket_path, "delete-buffer", "-b", buf_name],
                 check=False,
             )
 

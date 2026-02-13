@@ -39,23 +39,23 @@ class TestSendKeys:
 
         # load-buffer with unique name and message as stdin
         assert calls[0] == call(
-            ["tmux", "load-buffer", "-b", "cao_abcd1234", "-"],
+            ["tmux", "-S", "/tmp/tmux/pocketcoder", "load-buffer", "-b", "cao_abcd1234", "-"],
             input=b"hello",
             check=True,
         )
         # paste-buffer with -p (bracketed paste)
         assert calls[1] == call(
-            ["tmux", "paste-buffer", "-p", "-b", "cao_abcd1234", "-t", "sess:win"],
+            ["tmux", "-S", "/tmp/tmux/pocketcoder", "paste-buffer", "-p", "-b", "cao_abcd1234", "-t", "sess:win"],
             check=True,
         )
         # send Enter
         assert calls[2] == call(
-            ["tmux", "send-keys", "-t", "sess:win", "Enter"],
+            ["tmux", "-S", "/tmp/tmux/pocketcoder", "send-keys", "-t", "sess:win", "Enter"],
             check=True,
         )
         # delete-buffer (best-effort)
         assert calls[3] == call(
-            ["tmux", "delete-buffer", "-b", "cao_abcd1234"],
+            ["tmux", "-S", "/tmp/tmux/pocketcoder", "delete-buffer", "-b", "cao_abcd1234"],
             check=False,
         )
 
@@ -66,7 +66,7 @@ class TestSendKeys:
 
         load_call = mock_subprocess.run.call_args_list[0]
         assert load_call == call(
-            ["tmux", "load-buffer", "-b", "cao_abcd1234", "-"],
+            ["tmux", "-S", "/tmp/tmux/pocketcoder", "load-buffer", "-b", "cao_abcd1234", "-"],
             input=msg.encode(),
             check=True,
         )
@@ -101,7 +101,7 @@ class TestSendKeys:
         # delete-buffer still called in finally block
         last_call = mock_subprocess.run.call_args_list[-1]
         assert last_call == call(
-            ["tmux", "delete-buffer", "-b", "cao_abcd1234"],
+            ["tmux", "-S", "/tmp/tmux/pocketcoder", "delete-buffer", "-b", "cao_abcd1234"],
             check=False,
         )
 
@@ -115,10 +115,11 @@ class TestSendKeys:
             client.send_keys("sess", "win", "msg2")
 
         calls = mock_subprocess.run.call_args_list
-        # First call uses cao_aaaa1111
-        assert calls[0][0][0][3] == "cao_aaaa1111"
+        # First call uses cao_aaaa1111: ['tmux', '-S', socket, 'load-buffer', '-b', 'cao...', ...]
+        # Index 4 is the buffer name argument position
+        assert calls[0][0][0][5] == "cao_aaaa1111"
         # Second call (index 4, after 4 calls from first send_keys) uses cao_cccc2222
-        assert calls[4][0][0][3] == "cao_cccc2222"
+        assert calls[4][0][0][5] == "cao_cccc2222"
 
     def test_large_message(self, client, mock_subprocess, mock_uuid):
         """Large messages go through in a single load-buffer call (no chunking)."""

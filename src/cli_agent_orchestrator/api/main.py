@@ -66,6 +66,10 @@ class TerminalOutputResponse(BaseModel):
     mode: str
 
 
+class TerminalInputRequest(BaseModel):
+    message: str
+
+
 class WorkingDirectoryResponse(BaseModel):
     """Response model for terminal working directory."""
 
@@ -262,9 +266,9 @@ async def get_terminal_working_directory(terminal_id: TerminalId) -> WorkingDire
 
 
 @app.post("/terminals/{terminal_id}/input")
-async def send_terminal_input(terminal_id: TerminalId, message: str) -> Dict:
+async def send_terminal_input(terminal_id: TerminalId, request: TerminalInputRequest) -> Dict:
     try:
-        success = terminal_service.send_input(terminal_id, message)
+        success = terminal_service.send_input(terminal_id, request.message)
         return {"success": success}
     except ValueError as e:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(e))
