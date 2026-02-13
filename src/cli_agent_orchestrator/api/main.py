@@ -273,14 +273,23 @@ async def get_terminal_working_directory(terminal_id: TerminalId) -> WorkingDire
         )
 
 
+
+class InputRequest(BaseModel):
+    message: str
+
+
 @app.post("/terminals/{terminal_id}/input")
-async def send_terminal_input(terminal_id: TerminalId, message: str) -> Dict:
+async def send_terminal_input(terminal_id: TerminalId, request: InputRequest) -> Dict:
     try:
-        success = terminal_service.send_input(terminal_id, message)
+        logger.info(f"Received input for terminal {terminal_id}: {request.message[:50]}...")
+        success = terminal_service.send_input(terminal_id, request.message)
+        logger.info(f"Input processing result: {success}")
         return {"success": success}
     except ValueError as e:
+        logger.error(f"Input error for {terminal_id}: {e}")
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(e))
     except Exception as e:
+        logger.error(f"Failed to send input: {e}")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Failed to send input: {str(e)}",

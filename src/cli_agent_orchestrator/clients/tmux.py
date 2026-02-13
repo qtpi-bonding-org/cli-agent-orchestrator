@@ -113,57 +113,41 @@ class TmuxClient:
             raise
 
     def send_keys(self, session_name: str, window_name: str, keys: str) -> None:
-        """Send keys to window using tmux paste-buffer for instant delivery.
-
-        Uses load-buffer + paste-buffer instead of chunked send-keys to avoid
-        slow character-by-character input and special character interpretation.
-        The -p flag enables bracketed paste mode so multi-line content is treated
-        as a single input rather than submitting on each newline.
-        """
+        """Send keys to window using direct tmux send-keys command."""
         target = f"{session_name}:{window_name}"
-        buf_name = f"cao_{uuid.uuid4().hex[:8]}"
         try:
             logger.info(f"send_keys: {target} - keys: {keys}")
+            # Use direct send-keys. We use a list to avoid shell interpretation issues.
+            # We send the keys and then an Enter.
             subprocess.run(
-                ["tmux", "-S", self.socket_path, "load-buffer", "-b", buf_name, "-"],
-                input=keys.encode(),
-                check=True,
-            )
-            subprocess.run(
-                ["tmux", "-S", self.socket_path, "paste-buffer", "-p", "-b", buf_name, "-t", target],
-                check=True,
-            )
-            subprocess.run(
-                ["tmux", "-S", self.socket_path, "send-keys", "-t", target, "Enter"],
+                ["tmux", "-S", self.socket_path, "send-keys", "-t", target, keys, "Enter"],
                 check=True,
             )
             logger.debug(f"Sent keys to {target}")
         except Exception as e:
             logger.error(f"Failed to send keys to {target}: {e}")
             raise
-        finally:
-            subprocess.run(
-                ["tmux", "-S", self.socket_path, "delete-buffer", "-b", buf_name],
-                check=False,
-            )
 
     def get_history(
         self, session_name: str, window_name: str, tail_lines: Optional[int] = None
     ) -> str:
-        """Get window history using direct tmux command for reliability."""
-        target = f"{session_name}:{window_name}"
+        """Get window history using libtmux cmd for higher level abstraction."""
         try:
+            session = self.server.sessions.get(session_name=session_name)
+            if not session:
+                raise ValueError(f"Session '{session_name}' not found")
+
+            window = session.windows.get(window_name=window_name)
+            if not window:
+                raise ValueError(f"Window '{window_name}' not found in session '{session_name}'")
+
+            pane = window.panes[0]
             lines = tail_lines if tail_lines is not None else TMUX_HISTORY_LINES
-            # We use capture-pane directly with -S to ensure correct socket
-            result = subprocess.run(
-                ["tmux", "-S", self.socket_path, "capture-pane", "-e", "-p", "-t", target, "-S", f"-{lines}"],
-                capture_output=True,
-                text=True,
-                check=True
-            )
-            return result.stdout
+            result = pane.cmd("capture-pane", "-e", "-p", "-S", f"-{lines}")
+            # Join all lines with newlines to get complete output
+            return "\n".join(result.stdout) if result.stdout else ""
         except Exception as e:
-            logger.error(f"Failed to get history from {target}: {e}")
+            logger.error(f"Failed to get history from {session_name}:{window_name}: {e}")
             raise
 
     def list_sessions(self) -> List[Dict[str, str]]:

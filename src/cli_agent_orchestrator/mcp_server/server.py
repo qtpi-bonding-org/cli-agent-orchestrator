@@ -121,7 +121,7 @@ def _send_direct_input(terminal_id: str, message: str) -> None:
         Exception: If sending fails
     """
     response = requests.post(
-        f"{API_BASE_URL}/terminals/{terminal_id}/input", params={"message": message}
+        f"{API_BASE_URL}/terminals/{terminal_id}/input", json={"message": message}
     )
     response.raise_for_status()
 

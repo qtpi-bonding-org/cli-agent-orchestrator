@@ -35,19 +35,22 @@ class OpenCodeProvider(BaseProvider):
 
     def initialize(self) -> bool:
         """Initialize OpenCode CLI provider by ensuring shell is ready."""
-        # Just wait for the shell to be responsive before we attempt the first 'run'
+        # Wait for shell to be ready first
         if not wait_for_shell(tmux_client, self.session_name, self.window_name, timeout=10.0):
             raise TimeoutError("Shell initialization timed out after 10 seconds")
 
+        # OpenCode is a "one-shot per turn" tool in its current CLI form, 
+        # so 'initialize' just ensures the environment is ready for the first 'send_input'.
+        # We report IDLE as soon as the shell is ready.
         self._initialized = True
         return True
 
     def send_input(self, message: str) -> None:
         """Execute opencode run with the provided message."""
-        # Launch OpenCode in JSON mode to make parsing reliable
-        # We use a heredoc to safely pass multi-line messages with quotes
+        # Use a heredoc to safely pass multi-line messages with quotes
+        # We use 'opencode run' which triggers a full reasoning turn.
+        # MANDATORY: The agent profile must be passed to select the correct personna.
         command = f"opencode run --format json --continue --agent {self._agent_profile} << 'EOF_OPENCODE'\n{message}\nEOF_OPENCODE"
-        
         tmux_client.send_keys(self.session_name, self.window_name, command)
 
     def get_status(self, tail_lines: Optional[int] = None) -> TerminalStatus:
@@ -65,29 +68,27 @@ class OpenCodeProvider(BaseProvider):
         lines = [line.strip() for line in clean_output.splitlines() if line.strip()]
         
         # 1. Look for completion markers in the relevant history
-        # We check both forms of JSON spacing for maximum robustness
-        has_finish_event = '"type":"step_finish"' in clean_output or '"type": "step_finish"' in clean_output
-        has_error_event = '"type":"error"' in clean_output or '"type": "error"' in clean_output
+        collapsed_output = clean_output.replace("\n", "").replace("\r", "")
+        has_finish_event = any(m in collapsed_output for m in ['"type":"step-finish"', '"type":"step_finish"', '"type": "step-finish"', '"type": "step_finish"'])
+        has_error_event = any(m in collapsed_output for m in ['"type":"error"', '"type": "error"'])
         
         # 2. Check for shell prompt at the very end
-        # The prompt is the definitive signal that the process has returned control to the shell
-        at_prompt = lines and re.search(r"root@.*:.*#\s*$", lines[-1])
+        # This is the definitive signal that the process has returned control to the shell
+        # lenient match for both root/user prompts and simple $ prompts
+        last_line = lines[-1] if lines else ""
+        at_prompt = bool(lines and re.search(r"(?:[#$]|root@.*[#$])\s*$", last_line))
 
-        status = TerminalStatus.PROCESSING
         if at_prompt:
+             # If we just finished a turn, we are COMPLETED until the next turn starts.
+             # If we are just sitting at a prompt with no history of finishing, we are IDLE.
              if has_finish_event:
-                  status = TerminalStatus.COMPLETED
+                  return TerminalStatus.COMPLETED
              elif has_error_event:
-                  status = TerminalStatus.ERROR
+                  return TerminalStatus.ERROR
              else:
-                  status = TerminalStatus.IDLE
+                  return TerminalStatus.IDLE
 
-        logger.debug(f"OpenCode get_status: at_prompt={at_prompt}, has_finish={has_finish_event}, status={status}")
-        
-        if at_prompt:
-             return status
-
-        # 3. If not at prompt, determine if we are still processing
+        # 3. If not at prompt, determine if we are still processing JSON events
         for line in reversed(lines):
             try:
                 json_match = re.search(r'(\{.*\})', line)
@@ -95,7 +96,7 @@ class OpenCodeProvider(BaseProvider):
                     continue
                     
                 event = json.loads(json_match.group(1))
-                event_type = event.get("type")
+                event_type = event.get("type", "").replace("-", "_")
                 
                 if event_type in ["step_start", "text", "call", "result", "tool_use", "step_finish"]:
                      return TerminalStatus.PROCESSING
@@ -106,66 +107,75 @@ class OpenCodeProvider(BaseProvider):
             except (json.JSONDecodeError, ValueError):
                 continue
 
+        # Default to processing if we are between lines and not at prompt
         return TerminalStatus.PROCESSING
 
     def extract_last_message_from_script(self, script_output: str) -> str:
         """Extract agent's final response message by gathering text from the LAST message block."""
-        lines = script_output.strip().splitlines()
+        # Clean and collapse for robust JSON detection across line wraps
+        clean_output = re.sub(ANSI_CODE_PATTERN, "", script_output)
+        clean_output = re.sub(ESCAPE_SEQUENCE_PATTERN, "", clean_output)
+        clean_output = re.sub(CONTROL_CHAR_PATTERN, "", clean_output)
+        collapsed = clean_output.replace("\n", "").replace("\r", "")
         
-        # 1. Find the last sessionID/messageID from a step_finish event
-        last_message_id = None
-        for line in reversed(lines):
+        # 1. Extract all valid JSON objects from the stream
+        json_objects = []
+        decoder = json.JSONDecoder()
+        pos = 0
+        while pos < len(collapsed):
             try:
-                json_match = re.search(r'(\{.*\})', line.strip())
-                if not json_match:
-                    continue
-                event = json.loads(json_match.group(1))
-                if event.get("type") == "step_finish":
-                     last_message_id = event.get("messageID") or event.get("part", {}).get("messageID")
-                     if last_message_id:
-                          break
-            except (json.JSONDecodeError, ValueError):
-                continue
+                start = collapsed.find('{', pos)
+                if start == -1:
+                    break
+                obj, end = decoder.raw_decode(collapsed[start:])
+                json_objects.append(obj)
+                pos = start + end
+            except json.JSONDecodeError:
+                pos = start + 1
+
+        logger.debug(f"OpenCode extractor: Found {len(json_objects)} JSON objects in history")
+
+        # 2. Find the last sessionID/messageID from a step_finish event
+        last_message_id = None
+        for event in reversed(json_objects):
+            etype = event.get("type", "").replace("-", "_")
+            if etype == "step_finish":
+                 last_message_id = event.get("messageID") or event.get("part", {}).get("messageID")
+                 if last_message_id:
+                      break
 
         all_text_parts = []
         
-        # 2. Gather all text events matching that specific message ID
-        for line in lines:
-            try:
-                json_match = re.search(r'(\{.*\})', line.strip())
-                if not json_match:
-                    continue
-                event = json.loads(json_match.group(1))
-                if event.get("type") == "text":
-                     message_id = event.get("messageID") or event.get("part", {}).get("messageID")
-                     # If we found a specific turn, only take parts from that turn
-                     # Otherwise (fallback), take anything that looks like a response
-                     if not last_message_id or message_id == last_message_id:
-                          part = event.get("part", {})
-                          text = part.get("text", "")
-                          if text:
-                               all_text_parts.append(text)
-            except (json.JSONDecodeError, ValueError):
-                continue
+        # 3. Gather all text events
+        # We look in both event['text'] and event['part']['text']
+        for event in json_objects:
+            etype = event.get("type", "").replace("-", "_")
+            if etype == "text":
+                 msg_id = event.get("messageID") or event.get("part", {}).get("messageID")
+                 
+                 # Only take parts belonging to the final message ID (if we found one)
+                 # Otherwise take all text events (as a fallback)
+                 if not last_message_id or msg_id == last_message_id:
+                      # Try nested first, then flat
+                      part_text = event.get("part", {}).get("text")
+                      flat_text = event.get("text")
+                      
+                      text = part_text if part_text is not None else flat_text
+                      if text:
+                           all_text_parts.append(text)
         
         final_answer = "".join(all_text_parts).strip()
+        logger.debug(f"OpenCode extractor: Extracted {len(all_text_parts)} text parts. Length: {len(final_answer)}")
 
         if not final_answer:
-            # Final fallback: if JSON parsing failed but we are finished, 
-            # try to grab anything between the last command and the prompt
-            # but JSON extraction is the primary way.
             raise ValueError("No text found in OpenCode output for the last message turn")
 
-        # Clean up the message
-        final_answer = re.sub(ANSI_CODE_PATTERN, "", final_answer)
-        final_answer = re.sub(ESCAPE_SEQUENCE_PATTERN, "", final_answer)
-        final_answer = re.sub(CONTROL_CHAR_PATTERN, "", final_answer)
         return final_answer.strip()
 
     def get_idle_pattern_for_log(self) -> str:
         """Return a pattern to search for in logs to detect IDLE."""
-        # In JSON mode, we look for step_finish event
-        return r'"type":\s*"step_finish"'
+        # In JSON mode, we look for step_finish/step-finish event
+        return r'"type":\s*"step[_-]finish"'
 
     def exit_cli(self) -> str:
         """Command to exit."""

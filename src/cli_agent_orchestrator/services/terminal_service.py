@@ -164,13 +164,22 @@ def get_working_directory(terminal_id: str) -> Optional[str]:
 
 
 def send_input(terminal_id: str, message: str) -> bool:
-    """Send input to terminal."""
+    """Send input to terminal using appropriate provider."""
     try:
-        metadata = get_terminal_metadata(terminal_id)
-        if not metadata:
-            raise ValueError(f"Terminal '{terminal_id}' not found")
+        # Try to get active provider first
+        provider = provider_manager.get_provider(terminal_id)
+        
+        if provider:
+            # Delegate wrapping/formatting to provider logic (e.g. OpenCode wrapper)
+            provider.send_input(message)
+        else:
+            # Fallback to direct tmux if no provider active (or after restart)
+            metadata = get_terminal_metadata(terminal_id)
+            if not metadata:
+                raise ValueError(f"Terminal '{terminal_id}' not found")
 
-        tmux_client.send_keys(metadata["tmux_session"], metadata["tmux_window"], message)
+            logger.warning(f"No active provider for {terminal_id}, sending raw input.")
+            tmux_client.send_keys(metadata["tmux_session"], metadata["tmux_window"], message)
 
         update_last_active(terminal_id)
         logger.info(f"Sent input to terminal: {terminal_id}")

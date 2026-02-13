@@ -3,7 +3,7 @@
 import logging
 import time
 import uuid
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, List, Optional, Union
 
 import httpx
 
@@ -88,15 +88,24 @@ async def wait_until_terminal_status(
     import asyncio
     import httpx
     start_time = time.time()
+    logger.info(f"Polling terminal {terminal_id} for status {target_status} (timeout={timeout}s)")
     while time.time() - start_time < timeout:
         try:
             async with httpx.AsyncClient() as client:
                 response = await client.get(f"{API_BASE_URL}/terminals/{terminal_id}", timeout=10.0)
                 if response.status_code == 200:
                     terminal_data = response.json()
-                    if terminal_data["status"] == target_status.value:
+                    current_status = terminal_data.get("status")
+                    logger.debug(f"Terminal {terminal_id} current status: {current_status}")
+                    if current_status == target_status.value:
+                        logger.info(f"Terminal {terminal_id} reached {target_status}")
                         return True
-        except Exception:
+                else:
+                    logger.warning(f"Polling {terminal_id} failed with status {response.status_code}")
+        except Exception as e:
+            logger.error(f"Error polling terminal {terminal_id}: {e}")
             pass
         await asyncio.sleep(polling_interval)
+    
+    logger.error(f"Timed out waiting for terminal {terminal_id} to reach {target_status}")
     return False
