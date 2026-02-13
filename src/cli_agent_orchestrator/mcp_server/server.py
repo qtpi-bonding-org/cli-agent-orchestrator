@@ -13,7 +13,7 @@ from pydantic import Field
 from cli_agent_orchestrator.constants import API_BASE_URL, DEFAULT_PROVIDER
 from cli_agent_orchestrator.mcp_server.models import HandoffResult
 from cli_agent_orchestrator.models.terminal import TerminalStatus
-from cli_agent_orchestrator.utils.terminal import generate_session_name, wait_until_terminal_status
+from cli_agent_orchestrator.utils.terminal import generate_session_name, async_wait_until_terminal_status
 
 logger = logging.getLogger(__name__)
 
@@ -164,7 +164,7 @@ async def _handoff_impl(
         terminal_id, provider = _create_terminal(agent_profile, working_directory)
 
         # Wait for terminal to be IDLE before sending message
-        if not await wait_until_terminal_status(terminal_id, TerminalStatus.IDLE, timeout=30.0):
+        if not await async_wait_until_terminal_status(terminal_id, TerminalStatus.IDLE, timeout=30.0):
             return HandoffResult(
                 success=False,
                 message=f"Terminal {terminal_id} did not reach IDLE status within 30 seconds",
@@ -178,7 +178,7 @@ async def _handoff_impl(
         _send_direct_input(terminal_id, message)
 
         # Monitor until completion with timeout
-        if not await wait_until_terminal_status(
+        if not await async_wait_until_terminal_status(
             terminal_id, TerminalStatus.COMPLETED, timeout=timeout, polling_interval=1.0
         ):
             return HandoffResult(

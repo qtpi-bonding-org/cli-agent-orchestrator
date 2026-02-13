@@ -1,5 +1,6 @@
 """Session utilities for CLI Agent Orchestrator."""
 
+import asyncio
 import logging
 import time
 import uuid
@@ -65,7 +66,7 @@ def wait_until_status(
     timeout: float = 30.0,
     polling_interval: float = 1.0,
 ) -> bool:
-    """Wait until provider reaches target status or timeout."""
+    """Wait until provider reaches target status or timeout (Synchronous)."""
     start_time = time.time()
 
     while time.time() - start_time < timeout:
@@ -78,18 +79,36 @@ def wait_until_status(
     return False
 
 
+async def async_wait_until_status(
+    provider_instance: "BaseProvider",
+    target_status: TerminalStatus,
+    timeout: float = 30.0,
+    polling_interval: float = 1.0,
+) -> bool:
+    """Wait until provider reaches target status or timeout (Asynchronous)."""
+    start_time = time.time()
+
+    while time.time() - start_time < timeout:
+        status = provider_instance.get_status()
+        logger.info(f"Waiting for {target_status}, current status: {status}")
+        if status == target_status:
+            return True
+        await asyncio.sleep(polling_interval)
+
+    return False
+
+
 def wait_until_terminal_status(
     terminal_id: str,
     target_status: TerminalStatus,
     timeout: float = 30.0,
     polling_interval: float = 1.0,
 ) -> bool:
-    """Wait until terminal reaches target status using API endpoint."""
+    """Wait until terminal reaches target status using API endpoint (Synchronous)."""
     start_time = time.time()
     while time.time() - start_time < timeout:
         try:
             response = httpx.get(f"{API_BASE_URL}/terminals/{terminal_id}", timeout=10.0)
-            logger.info(response)
             if response.status_code == 200:
                 terminal_data = response.json()
                 if terminal_data["status"] == target_status.value:
@@ -97,4 +116,26 @@ def wait_until_terminal_status(
         except Exception:
             pass
         time.sleep(polling_interval)
+    return False
+
+
+async def async_wait_until_terminal_status(
+    terminal_id: str,
+    target_status: TerminalStatus,
+    timeout: float = 30.0,
+    polling_interval: float = 1.0,
+) -> bool:
+    """Wait until terminal reaches target status using API endpoint (Asynchronous)."""
+    start_time = time.time()
+    async with httpx.AsyncClient() as client:
+        while time.time() - start_time < timeout:
+            try:
+                response = await client.get(f"{API_BASE_URL}/terminals/{terminal_id}", timeout=10.0)
+                if response.status_code == 200:
+                    terminal_data = response.json()
+                    if terminal_data["status"] == target_status.value:
+                        return True
+            except Exception:
+                pass
+            await asyncio.sleep(polling_interval)
     return False
