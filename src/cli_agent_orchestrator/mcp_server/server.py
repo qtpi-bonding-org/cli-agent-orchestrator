@@ -474,6 +474,8 @@ def main():
     port = int(os.getenv("CAO_MCP_PORT", "9888"))
     
     print(f"🔍 [CAO-MCP] Initializing with transport: {transport}")
+    print(f"🔍 [CAO-MCP] Port: {port}")
+    print(f"🔍 [CAO-MCP] PID: {os.getpid()}")
     
     if transport == "sse":
         print(f"🚀 [CAO-MCP] Starting SSE Server on 0.0.0.0:{port}")
