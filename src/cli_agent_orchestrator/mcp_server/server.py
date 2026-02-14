@@ -177,8 +177,10 @@ async def _handoff_impl(
     start_time = time.time()
 
     try:
+        print(f"🎬 [CAO-MCP] Starting Handoff: profile={agent_profile}, directory={working_directory}")
         # Create terminal
         terminal_id, provider = _create_terminal(agent_profile, working_directory)
+        print(f"🆕 [CAO-MCP] Created terminal {terminal_id} ({provider})")
 
         # Wait for terminal to be IDLE before sending message
         if not await async_wait_until_terminal_status(terminal_id, TerminalStatus.IDLE, timeout=30.0):
@@ -222,6 +224,7 @@ async def _handoff_impl(
 
         execution_time = time.time() - start_time
 
+        print(f"✅ [CAO-MCP] Handoff success for {agent_profile}. Result captured.")
         return HandoffResult(
             success=True,
             message=f"Successfully handed off to {agent_profile} ({provider}) in {execution_time:.2f}s",
@@ -230,6 +233,7 @@ async def _handoff_impl(
         )
 
     except Exception as e:
+        print(f"❌ [CAO-MCP] Handoff Exception: {str(e)}")
         return HandoffResult(
             success=False, message=f"Handoff failed: {str(e)}", output=None, terminal_id=None
         )
@@ -352,6 +356,7 @@ def _assign_impl(
         # Send message immediately
         _send_direct_input(terminal_id, message)
 
+        print(f"✅ [CAO-MCP] Assign success: terminal_id={terminal_id}")
         return {
             "success": True,
             "terminal_id": terminal_id,
@@ -359,7 +364,12 @@ def _assign_impl(
         }
 
     except Exception as e:
-        return {"success": False, "terminal_id": None, "message": f"Assignment failed: {str(e)}"}
+        print(f"❌ [CAO-MCP] Assign Exception: {str(e)}")
+        return {
+            "success": False,
+            "terminal_id": None,
+            "message": f"Assignment failed: {str(e)}",
+        }
 
 
 # Conditional tool registration for assign
@@ -446,15 +456,33 @@ async def send_message(
         Dict with success status and message details
     """
     try:
-        return _send_to_inbox(receiver_id, message)
+        print(f"📬 [CAO-MCP] Sending message to {receiver_id}...")
+        res = _send_to_inbox(receiver_id, message)
+        print(f"✅ [CAO-MCP] Message sent to {receiver_id}")
+        return res
     except Exception as e:
+        print(f"❌ [CAO-MCP] send_message Exception: {str(e)}")
         return {"success": False, "error": str(e)}
 
 
 def main():
     """Main entry point for the MCP server."""
-    mcp.run()
+    import os
+    
+    transport = os.getenv("CAO_MCP_TRANSPORT", "stdio")
+    port = int(os.getenv("CAO_MCP_PORT", "9888"))
+    
+    print(f"🔍 [CAO-MCP] Initializing with transport: {transport}")
+    
+    if transport == "sse":
+        print(f"🚀 [CAO-MCP] Starting SSE Server on 0.0.0.0:{port}")
+        print(f"📡 [CAO-MCP] Endpoint will be: http://0.0.0.0:{port}/sse")
+        mcp.run(transport="sse", port=port, host="0.0.0.0")
+    else:
+        print(f"📟 [CAO-MCP] Starting STDIO Server")
+        mcp.run(transport="stdio")
 
 
 if __name__ == "__main__":
+    print("🎬 [CAO-MCP] Process starting...")
     main()
