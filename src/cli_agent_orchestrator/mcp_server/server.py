@@ -455,6 +455,7 @@ async def send_message(
     Returns:
         Dict with success status and message details
     """
+    print(f"🎬 [CAO-MCP] Tool Call: send_message(receiver_id={receiver_id}, message_len={len(message)})")
     try:
         print(f"📬 [CAO-MCP] Sending message to {receiver_id}...")
         res = _send_to_inbox(receiver_id, message)
