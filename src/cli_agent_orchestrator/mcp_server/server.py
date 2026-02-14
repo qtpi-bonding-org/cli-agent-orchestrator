@@ -479,6 +479,9 @@ def main():
         print(f"🚀 [CAO-MCP] Starting SSE Server on 0.0.0.0:{port}")
         print(f"📡 [CAO-MCP] Endpoint will be: http://0.0.0.0:{port}/sse")
         mcp.run(transport="sse", port=port, host="0.0.0.0")
+    elif transport == "http":
+        print(f"🚀 [CAO-MCP] Starting HTTP Server on 0.0.0.0:{port}")
+        mcp.run(transport="http", port=port, host="0.0.0.0")
     else:
         print(f"📟 [CAO-MCP] Starting STDIO Server")
         mcp.run(transport="stdio")
