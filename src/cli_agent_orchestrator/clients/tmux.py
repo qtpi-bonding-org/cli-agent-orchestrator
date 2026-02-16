@@ -50,6 +50,7 @@ class TmuxClient:
         window_name: str,
         terminal_id: str,
         working_directory: Optional[str] = None,
+        chat_id: Optional[str] = None,
     ) -> str:
         """Create detached tmux session with initial window and return window name."""
         try:
@@ -57,6 +58,8 @@ class TmuxClient:
 
             environment = os.environ.copy()
             environment["CAO_TERMINAL_ID"] = terminal_id
+            if chat_id:
+                environment["POCKETCODER_CHAT_ID"] = chat_id
 
             session = self.server.new_session(
                 session_name=session_name,
@@ -82,6 +85,7 @@ class TmuxClient:
         window_name: str,
         terminal_id: str,
         working_directory: Optional[str] = None,
+        chat_id: Optional[str] = None,
     ) -> str:
         """Create window in session and return window name."""
         try:
@@ -91,10 +95,14 @@ class TmuxClient:
             if not session:
                 raise ValueError(f"Session '{session_name}' not found")
 
+            env = {"CAO_TERMINAL_ID": terminal_id}
+            if chat_id:
+                env["POCKETCODER_CHAT_ID"] = chat_id
+
             window = session.new_window(
                 window_name=window_name,
                 start_directory=working_directory,
-                environment={"CAO_TERMINAL_ID": terminal_id},
+                environment=env,
             )
 
             logger.info(

@@ -30,6 +30,7 @@ class Terminal(BaseModel):
     provider: ProviderType = Field(..., description="CLI tool provider")
     session_name: str = Field(..., description="Session name")
     agent_profile: Optional[str] = Field(None, description="Agent profile")
+    external_session_id: Optional[str] = Field(None, description="External session ID")
     status: Optional[TerminalStatus] = Field(
         None, description="Current terminal status (live only)"
     )

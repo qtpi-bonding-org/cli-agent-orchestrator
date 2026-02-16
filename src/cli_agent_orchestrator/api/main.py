@@ -133,6 +133,7 @@ async def create_session(
     agent_profile: str,
     session_name: Optional[str] = None,
     working_directory: Optional[str] = None,
+    external_session_id: Optional[str] = None,
 ) -> Terminal:
     """Create a new session with exactly one terminal."""
     try:
@@ -142,6 +143,7 @@ async def create_session(
             session_name=session_name,
             new_session=True,
             working_directory=working_directory,
+            external_session_id=external_session_id,
         )
         return result
 
@@ -202,6 +204,7 @@ async def create_terminal_in_session(
     provider: str,
     agent_profile: str,
     working_directory: Optional[str] = None,
+    external_session_id: Optional[str] = None,
 ) -> Terminal:
     """Create additional terminal in existing session."""
     try:
@@ -211,6 +214,7 @@ async def create_terminal_in_session(
             session_name=session_name,
             new_session=False,
             working_directory=working_directory,
+            external_session_id=external_session_id,
         )
         return result
     except ValueError as e:
@@ -247,6 +251,25 @@ async def get_terminal(terminal_id: TerminalId) -> Terminal:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Failed to get terminal: {str(e)}",
+        )
+
+
+@app.get("/terminals/by-external-session/{external_session_id}", response_model=Terminal)
+async def get_terminal_by_external_session_endpoint(external_session_id: str) -> Terminal:
+    """Get terminal by its external session ID (mapping from OpenCode)."""
+    try:
+        from cli_agent_orchestrator.clients.database import get_terminal_by_external_session
+
+        terminal = get_terminal_by_external_session(external_session_id)
+        if not terminal:
+            raise ValueError(f"No terminal found for external session '{external_session_id}'")
+        return Terminal(**terminal)
+    except ValueError as e:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(e))
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to get terminal by external session: {str(e)}",
         )
 
 

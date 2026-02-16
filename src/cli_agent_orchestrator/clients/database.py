@@ -26,6 +26,7 @@ class TerminalModel(Base):
     tmux_window = Column(String, nullable=False)  # "window-name"
     provider = Column(String, nullable=False)  # "q_cli", "claude_code"
     agent_profile = Column(String)  # "developer", "reviewer" (optional)
+    external_session_id = Column(String)  # "ses_..."
     last_active = Column(DateTime, default=datetime.now)
 
 
@@ -75,6 +76,7 @@ def create_terminal(
     tmux_window: str,
     provider: str,
     agent_profile: Optional[str] = None,
+    external_session_id: Optional[str] = None,
 ) -> Dict[str, Any]:
     """Create terminal metadata record."""
     with SessionLocal() as db:
@@ -84,6 +86,7 @@ def create_terminal(
             tmux_window=tmux_window,
             provider=provider,
             agent_profile=agent_profile,
+            external_session_id=external_session_id,
         )
         db.add(terminal)
         db.commit()
@@ -93,6 +96,7 @@ def create_terminal(
             "tmux_window": terminal.tmux_window,
             "provider": terminal.provider,
             "agent_profile": terminal.agent_profile,
+            "external_session_id": terminal.external_session_id,
         }
 
 
@@ -112,6 +116,28 @@ def get_terminal_metadata(terminal_id: str) -> Optional[Dict[str, Any]]:
             "tmux_window": terminal.tmux_window,
             "provider": terminal.provider,
             "agent_profile": terminal.agent_profile,
+            "external_session_id": terminal.external_session_id,
+            "last_active": terminal.last_active,
+        }
+
+
+def get_terminal_by_external_session(external_session_id: str) -> Optional[Dict[str, Any]]:
+    """Get terminal metadata by external session ID."""
+    with SessionLocal() as db:
+        terminal = (
+            db.query(TerminalModel)
+            .filter(TerminalModel.external_session_id == external_session_id)
+            .first()
+        )
+        if not terminal:
+            return None
+        return {
+            "id": terminal.id,
+            "tmux_session": terminal.tmux_session,
+            "tmux_window": terminal.tmux_window,
+            "provider": terminal.provider,
+            "agent_profile": terminal.agent_profile,
+            "external_session_id": terminal.external_session_id,
             "last_active": terminal.last_active,
         }
 

@@ -6,7 +6,7 @@ from pathlib import Path
 from cli_agent_orchestrator.models.provider import ProviderType
 
 # Session configuration
-SESSION_PREFIX = "cao-"
+SESSION_PREFIX = "pc-"
 
 # Available providers (derived from enum)
 PROVIDERS = [p.value for p in ProviderType]

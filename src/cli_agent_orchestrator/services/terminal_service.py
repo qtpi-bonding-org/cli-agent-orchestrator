@@ -38,6 +38,7 @@ def create_terminal(
     session_name: Optional[str] = None,
     new_session: bool = False,
     working_directory: Optional[str] = None,
+    external_session_id: Optional[str] = None,
 ) -> Terminal:
     """Create terminal, optionally creating new session with it."""
     try:
@@ -59,17 +60,21 @@ def create_terminal(
                 raise ValueError(f"Session '{session_name}' already exists")
 
             # Create new tmux session with this terminal as the initial window
-            tmux_client.create_session(session_name, window_name, terminal_id, working_directory)
+            tmux_client.create_session(
+                session_name, window_name, terminal_id, working_directory, chat_id=external_session_id
+            )
         else:
             # Add window to existing session
             if not tmux_client.session_exists(session_name):
                 raise ValueError(f"Session '{session_name}' not found")
             window_name = tmux_client.create_window(
-                session_name, window_name, terminal_id, working_directory
+                session_name, window_name, terminal_id, working_directory, chat_id=external_session_id
             )
 
         # Save terminal metadata to database
-        db_create_terminal(terminal_id, session_name, window_name, provider, agent_profile)
+        db_create_terminal(
+            terminal_id, session_name, window_name, provider, agent_profile, external_session_id
+        )
 
         # Initialize provider
         provider_instance = provider_manager.create_provider(
@@ -88,6 +93,7 @@ def create_terminal(
             provider=ProviderType(provider),
             session_name=session_name,
             agent_profile=agent_profile,
+            external_session_id=external_session_id,
             status=TerminalStatus.IDLE,
             last_active=datetime.now(),
         )

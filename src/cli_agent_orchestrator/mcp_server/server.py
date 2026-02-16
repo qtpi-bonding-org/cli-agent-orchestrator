@@ -7,7 +7,7 @@ import time
 from typing import Any, Dict, Optional, Tuple
 
 import requests
-from fastmcp import FastMCP
+from fastmcp import FastMCP, Context
 from pydantic import Field
 
 from cli_agent_orchestrator.constants import API_BASE_URL, DEFAULT_PROVIDER
@@ -38,7 +38,7 @@ mcp = FastMCP(
 
 
 def _create_terminal(
-    agent_profile: str, working_directory: Optional[str] = None
+    agent_profile: str, working_directory: Optional[str] = None, session_id: Optional[str] = None
 ) -> Tuple[str, str]:
     """Create a new terminal with the specified agent profile.
 
@@ -54,8 +54,18 @@ def _create_terminal(
     """
     provider = DEFAULT_PROVIDER
 
-    # Get current terminal ID from environment
+    # Get current terminal ID from environment (legacy) or session_id (multi-tenant)
     current_terminal_id = os.environ.get("CAO_TERMINAL_ID")
+
+    if not current_terminal_id and session_id:
+        try:
+            response = requests.get(f"{API_BASE_URL}/terminals/by-external-session/{session_id}")
+            if response.status_code == 200:
+                current_terminal_id = response.json().get("id")
+                logger.info(f"Resolved terminal {current_terminal_id} from session {session_id}")
+        except Exception as e:
+            logger.debug(f"Session lookup failed: {e}")
+
     if current_terminal_id:
         # Get terminal metadata via API
         response = requests.get(f"{API_BASE_URL}/terminals/{current_terminal_id}")
@@ -88,12 +98,70 @@ def _create_terminal(
         params = {"provider": provider, "agent_profile": agent_profile}
         if working_directory:
             params["working_directory"] = working_directory
+    if session_id:
+        session_name = f"pc-{session_id}"
+        # Check if session already exists in CAO
+        try:
+            resp = requests.get(f"{API_BASE_URL}/sessions/{session_name}")
+            if resp.status_code == 200:
+                # Session exists, create terminal in it
+                params = {"provider": provider, "agent_profile": agent_profile, "external_session_id": session_id}
+                if working_directory:
+                    params["working_directory"] = working_directory
+                
+                response = requests.post(f"{API_BASE_URL}/sessions/{session_name}/terminals", params=params)
+                response.raise_for_status()
+                terminal = response.json()
+                return terminal["id"], provider
+        except Exception as e:
+            logger.debug(f"Session {session_name} not found or error: {e}")
+
+        # If not returned, create new session with this name
+        params = {
+            "provider": provider,
+            "agent_profile": agent_profile,
+            "session_name": session_name,
+            "external_session_id": session_id,
+        }
+        if working_directory:
+            params["working_directory"] = working_directory
+
+        response = requests.post(f"{API_BASE_URL}/sessions", params=params)
+        response.raise_for_status()
+        terminal = response.json()
+    elif current_terminal_id:
+        # Get terminal metadata via API
+        response = requests.get(f"{API_BASE_URL}/terminals/{current_terminal_id}")
+        response.raise_for_status()
+        terminal_metadata = response.json()
+
+        provider = terminal_metadata["provider"]
+        session_name = terminal_metadata["session_name"]
+
+        # If no working_directory specified, get conductor's current directory
+        if working_directory is None:
+            try:
+                response = requests.get(
+                    f"{API_BASE_URL}/terminals/{current_terminal_id}/working-directory"
+                )
+                if response.status_code == 200:
+                    working_directory = response.json().get("working_directory")
+                    logger.info(f"Inherited working directory from conductor: {working_directory}")
+            except Exception as e:
+                logger.warning(
+                    f"Error fetching conductor's working directory: {e}, will use server default"
+                )
+
+        # Create new terminal in existing session
+        params = {"provider": provider, "agent_profile": agent_profile}
+        if working_directory:
+            params["working_directory"] = working_directory
 
         response = requests.post(f"{API_BASE_URL}/sessions/{session_name}/terminals", params=params)
         response.raise_for_status()
         terminal = response.json()
     else:
-        # Create new session with terminal
+        # Create new session with unique name
         session_name = generate_session_name()
         params = {
             "provider": provider,
@@ -126,23 +194,26 @@ def _send_direct_input(terminal_id: str, message: str) -> None:
     response.raise_for_status()
 
 
-def _send_to_inbox(receiver_id: str, message: str) -> Dict[str, Any]:
+def _send_to_inbox(receiver_id: str, message: str, sender_id: Optional[str] = None) -> Dict[str, Any]:
     """Send message to another terminal's inbox (queued delivery when IDLE).
 
     Args:
         receiver_id: Target terminal ID
         message: Message content
+        sender_id: Optional explicit sender ID
 
     Returns:
         Dict with message details
 
     Raises:
-        ValueError: If CAO_TERMINAL_ID not set
+        ValueError: If sender identity cannot be determined
         Exception: If API call fails
     """
-    sender_id = os.getenv("CAO_TERMINAL_ID")
     if not sender_id:
-        raise ValueError("CAO_TERMINAL_ID not set - cannot determine sender")
+        sender_id = os.getenv("CAO_TERMINAL_ID")
+    
+    if not sender_id:
+        raise ValueError("Sender identity not found (no CAO_TERMINAL_ID and no explicit sender)")
 
     response = requests.post(
         f"{API_BASE_URL}/terminals/{receiver_id}/inbox/messages",
@@ -169,9 +240,33 @@ def _notify_brain(session_id: str, event_type: str, payload: Dict[str, Any] = No
         logger.warning(f"Failed to notify brain: {e}")
 
 
+def _get_session_id(ctx: Context) -> Optional[str]:
+    """Extract session_id from FastMCP context (query params)."""
+    try:
+        if hasattr(ctx, "request"):
+            return ctx.request.query_params.get("session_id")
+    except:
+        pass
+    return None
+
+
+async def _resolve_sender_id(session_id: Optional[str]) -> Optional[str]:
+    """Resolve the terminal ID of the sender based on session_id."""
+    if not session_id:
+        return os.getenv("CAO_TERMINAL_ID")
+    
+    try:
+        response = requests.get(f"{API_BASE_URL}/terminals/by-external-session/{session_id}")
+        if response.status_code == 200:
+            return response.json().get("id")
+    except:
+        pass
+    return os.getenv("CAO_TERMINAL_ID")
+
+
 # Implementation functions
 async def _handoff_impl(
-    agent_profile: str, message: str, timeout: int = 600, working_directory: Optional[str] = None
+    agent_profile: str, message: str, timeout: int = 600, working_directory: Optional[str] = None, session_id: Optional[str] = None
 ) -> HandoffResult:
     """Implementation of handoff logic."""
     start_time = time.time()
@@ -179,7 +274,7 @@ async def _handoff_impl(
     try:
         print(f"🎬 [CAO-MCP] Starting Handoff: profile={agent_profile}, directory={working_directory}")
         # Create terminal
-        terminal_id, provider = _create_terminal(agent_profile, working_directory)
+        terminal_id, provider = _create_terminal(agent_profile, working_directory, session_id)
         print(f"🆕 [CAO-MCP] Created terminal {terminal_id} ({provider})")
 
         # Wait for terminal to be IDLE before sending message
@@ -220,7 +315,7 @@ async def _handoff_impl(
         response.raise_for_status()
 
         # NUDGE: Notify the brain that work is done
-        _notify_brain(terminal_id, "handoff_completed", {"terminal_id": terminal_id, "output": output})
+        _notify_brain(session_id or terminal_id, "handoff_completed", {"terminal_id": terminal_id, "output": output})
 
         execution_time = time.time() - start_time
 
@@ -258,6 +353,7 @@ if ENABLE_WORKING_DIRECTORY:
             default=None,
             description='Optional working directory where the agent should execute (e.g., "/path/to/workspace/src/Package")',
         ),
+        ctx: Context = None,
     ) -> HandoffResult:
         """Hand off a task to another agent via CAO terminal and wait for completion.
 
@@ -296,7 +392,8 @@ if ENABLE_WORKING_DIRECTORY:
         Returns:
             HandoffResult with success status, message, and agent output
         """
-        return await _handoff_impl(agent_profile, message, timeout, working_directory)
+        session_id = _get_session_id(ctx) if ctx else None
+        return await _handoff_impl(agent_profile, message, timeout, working_directory, session_id)
 
 else:
 
@@ -312,6 +409,7 @@ else:
             ge=1,
             le=3600,
         ),
+        ctx: Context = None,
     ) -> HandoffResult:
         """Hand off a task to another agent via CAO terminal and wait for completion.
 
@@ -341,17 +439,18 @@ else:
         Returns:
             HandoffResult with success status, message, and agent output
         """
-        return await _handoff_impl(agent_profile, message, timeout, None)
+        session_id = _get_session_id(ctx) if ctx else None
+        return await _handoff_impl(agent_profile, message, timeout, None, session_id)
 
 
 # Implementation function for assign
 def _assign_impl(
-    agent_profile: str, message: str, working_directory: Optional[str] = None
+    agent_profile: str, message: str, working_directory: Optional[str] = None, session_id: Optional[str] = None
 ) -> Dict[str, Any]:
     """Implementation of assign logic."""
     try:
         # Create terminal
-        terminal_id, _ = _create_terminal(agent_profile, working_directory)
+        terminal_id, _ = _create_terminal(agent_profile, working_directory, session_id)
 
         # Send message immediately
         _send_direct_input(terminal_id, message)
@@ -386,6 +485,7 @@ if ENABLE_WORKING_DIRECTORY:
         working_directory: Optional[str] = Field(
             default=None, description="Optional working directory where the agent should execute"
         ),
+        ctx: Context = None,
     ) -> Dict[str, Any]:
         """Assigns a task to another agent without blocking.
 
@@ -408,7 +508,8 @@ if ENABLE_WORKING_DIRECTORY:
         Returns:
             Dict with success status, worker terminal_id, and message
         """
-        return _assign_impl(agent_profile, message, working_directory)
+        session_id = _get_session_id(ctx) if ctx else None
+        return await _assign_impl(agent_profile, message, working_directory, session_id)
 
 else:
 
@@ -420,6 +521,7 @@ else:
         message: str = Field(
             description="The task message to send. Include callback instructions for the worker to send results back."
         ),
+        ctx: Context = None,
     ) -> Dict[str, Any]:
         """Assigns a task to another agent without blocking.
 
@@ -435,13 +537,15 @@ else:
         Returns:
             Dict with success status, worker terminal_id, and message
         """
-        return _assign_impl(agent_profile, message, None)
+        session_id = _get_session_id(ctx) if ctx else None
+        return await _assign_impl(agent_profile, message, None, session_id)
 
 
 @mcp.tool()
 async def send_message(
     receiver_id: str = Field(description="Target terminal ID to send message to"),
     message: str = Field(description="Message content to send"),
+    ctx: Context = None,
 ) -> Dict[str, Any]:
     """Send a message to another terminal's inbox.
 
@@ -456,9 +560,11 @@ async def send_message(
         Dict with success status and message details
     """
     print(f"🎬 [CAO-MCP] Tool Call: send_message(receiver_id={receiver_id}, message_len={len(message)})")
+    session_id = _get_session_id(ctx) if ctx else None
+    sender_id = await _resolve_sender_id(session_id)
     try:
         print(f"📬 [CAO-MCP] Sending message to {receiver_id}...")
-        res = _send_to_inbox(receiver_id, message)
+        res = _send_to_inbox(receiver_id, message, sender_id=sender_id)
         print(f"✅ [CAO-MCP] Message sent to {receiver_id}")
         return res
     except Exception as e:
