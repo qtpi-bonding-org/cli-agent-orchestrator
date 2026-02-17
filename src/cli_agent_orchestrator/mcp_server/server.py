@@ -1,8 +1,10 @@
 """CLI Agent Orchestrator MCP Server implementation."""
 
 import asyncio
+import json
 import logging
 import os
+import re
 import time
 from typing import Any, Dict, Optional, Tuple
 
@@ -10,9 +12,12 @@ import requests
 from fastmcp import FastMCP, Context
 from pydantic import Field
 
+from cli_agent_orchestrator.clients.database import get_terminal_metadata
+from cli_agent_orchestrator.clients.tmux import tmux_client
 from cli_agent_orchestrator.constants import API_BASE_URL, DEFAULT_PROVIDER
 from cli_agent_orchestrator.mcp_server.models import HandoffResult
 from cli_agent_orchestrator.models.terminal import TerminalStatus
+from cli_agent_orchestrator.providers.manager import provider_manager
 from cli_agent_orchestrator.utils.terminal import generate_session_name, async_wait_until_terminal_status
 
 logger = logging.getLogger(__name__)
@@ -37,6 +42,51 @@ mcp = FastMCP(
 )
 
 
+def _resolve_tmux_window_index(tmux_session_name: str, tmux_window_name: str) -> Optional[int]:
+    """Resolve the numeric tmux window index by querying tmux directly.
+
+    Window names are generated as '{profile}-{uuid4[:4]}' (e.g. 'analyst-ab12'),
+    so we can't parse the index from the name. Instead we query tmux for all
+    windows in the session and match by name.
+    """
+    try:
+        windows = tmux_client.get_session_windows(tmux_session_name)
+        for w in windows:
+            if w["name"] == tmux_window_name:
+                return int(w["index"])
+    except Exception as e:
+        logger.warning(f"Failed to resolve tmux window index for {tmux_session_name}:{tmux_window_name}: {e}")
+    return None
+
+
+def _extract_session_id_from_pane(tmux_session_name: str, tmux_window_name: str) -> Optional[str]:
+    """Extract OpenCode sessionID from the JSON event stream in a tmux pane.
+
+    OpenCode emits JSON events with a 'sessionID' field (e.g. 'ses_abc123...').
+    This is a process-level value — not a tmux environment variable — so we
+    parse it from the pane output rather than using 'tmux show-environment'.
+
+    The pane output may wrap long JSON lines across multiple visual lines,
+    so we collapse everything before matching.
+    """
+    try:
+        output = tmux_client.get_history(tmux_session_name, tmux_window_name, tail_lines=200)
+        if not output:
+            return None
+        # Collapse all whitespace (line wraps, newlines) into a single stream
+        # so we can match JSON fields that span visual line boundaries
+        collapsed = re.sub(r'\s+', '', output)
+        # Also strip ANSI escape codes
+        collapsed = re.sub(r'\x1b\[[0-9;]*[a-zA-Z]', '', collapsed)
+        # Look for sessionID in JSON events
+        match = re.search(r'"sessionID"\s*:\s*"(ses_[A-Za-z0-9_]+)"', collapsed)
+        if match:
+            return match.group(1)
+    except Exception as e:
+        logger.debug(f"Failed to extract sessionID from pane {tmux_session_name}:{tmux_window_name}: {e}")
+    return None
+
+
 def _create_terminal(
     agent_profile: str, working_directory: Optional[str] = None, session_id: Optional[str] = None
 ) -> Tuple[str, str]:
@@ -59,7 +109,7 @@ def _create_terminal(
 
     if not current_terminal_id and session_id:
         try:
-            response = requests.get(f"{API_BASE_URL}/terminals/by-external-session/{session_id}")
+            response = requests.get(f"{API_BASE_URL}/terminals/by-delegating-agent/{session_id}")
             if response.status_code == 200:
                 current_terminal_id = response.json().get("id")
                 logger.info(f"Resolved terminal {current_terminal_id} from session {session_id}")
@@ -105,7 +155,7 @@ def _create_terminal(
             resp = requests.get(f"{API_BASE_URL}/sessions/{session_name}")
             if resp.status_code == 200:
                 # Session exists, create terminal in it
-                params = {"provider": provider, "agent_profile": agent_profile, "external_session_id": session_id}
+                params = {"provider": provider, "agent_profile": agent_profile, "delegating_agent_id": session_id}
                 if working_directory:
                     params["working_directory"] = working_directory
                 
@@ -121,7 +171,7 @@ def _create_terminal(
             "provider": provider,
             "agent_profile": agent_profile,
             "session_name": session_name,
-            "external_session_id": session_id,
+            "delegating_agent_id": session_id,
         }
         if working_directory:
             params["working_directory"] = working_directory
@@ -224,15 +274,30 @@ def _send_to_inbox(receiver_id: str, message: str, sender_id: Optional[str] = No
 
 
 def _notify_brain(session_id: str, event_type: str, payload: Dict[str, Any] = None):
-    """Notify the brain (OpenCode) via Proxy."""
+    """Notify the brain (OpenCode/Poco) via Proxy that a subagent has an update.
+    
+    Used only for async workflows (assign + send_message callback).
+    The nudge tells Poco to check its inbox using the check_inbox tool.
+    """
     try:
         proxy_url = os.getenv("PROXY_URL", "http://proxy:3001")
+        
+        # Build a specific, actionable nudge message
+        sender = payload.get("sender_id", "unknown") if payload else "unknown"
+        preview = payload.get("preview", "") if payload else ""
+        nudge_text = (
+            f"[Subagent Update] Terminal {sender} sent you a message. "
+            f"Use the check_inbox tool to read it."
+        )
+        if preview:
+            nudge_text += f"\nPreview: {preview[:100]}"
+        
         requests.post(
             f"{proxy_url}/notify",
             json={
                 "session_id": session_id,
                 "event_type": event_type,
-                "payload": payload or {}
+                "payload": {"nudge_text": nudge_text, **(payload or {})}
             },
             timeout=2.0
         )
@@ -256,7 +321,7 @@ async def _resolve_sender_id(session_id: Optional[str]) -> Optional[str]:
         return os.getenv("CAO_TERMINAL_ID")
     
     try:
-        response = requests.get(f"{API_BASE_URL}/terminals/by-external-session/{session_id}")
+        response = requests.get(f"{API_BASE_URL}/terminals/by-delegating-agent/{session_id}")
         if response.status_code == 200:
             return response.json().get("id")
     except:
@@ -271,11 +336,29 @@ async def _handoff_impl(
     """Implementation of handoff logic."""
     start_time = time.time()
 
+    # Initialize enriched fields
+    subagent_id: Optional[str] = None
+    tmux_window_id: Optional[int] = None
+    enriched_agent_profile: Optional[str] = None
+    tmux_session_name: Optional[str] = None
+    tmux_window_name: Optional[str] = None
+
     try:
         print(f"🎬 [CAO-MCP] Starting Handoff: profile={agent_profile}, directory={working_directory}")
         # Create terminal
         terminal_id, provider = _create_terminal(agent_profile, working_directory, session_id)
         print(f"🆕 [CAO-MCP] Created terminal {terminal_id} ({provider})")
+
+        # Get terminal metadata for enriched fields
+        terminal_metadata = get_terminal_metadata(terminal_id)
+        if terminal_metadata:
+            tmux_session_name = terminal_metadata.get("tmux_session")
+            tmux_window_name = terminal_metadata.get("tmux_window")
+            enriched_agent_profile = terminal_metadata.get("agent_profile")
+            # Query actual tmux window index (window names are '{profile}-{uuid}', not 'window-N')
+            if tmux_session_name and tmux_window_name:
+                tmux_window_id = _resolve_tmux_window_index(tmux_session_name, tmux_window_name)
+                print(f"📐 [CAO-MCP] Resolved tmux_window_id={tmux_window_id} for {tmux_window_name}")
 
         # Wait for terminal to be IDLE before sending message
         if not await async_wait_until_terminal_status(terminal_id, TerminalStatus.IDLE, timeout=30.0):
@@ -284,6 +367,9 @@ async def _handoff_impl(
                 message=f"Terminal {terminal_id} did not reach IDLE status within 30 seconds",
                 output=None,
                 terminal_id=terminal_id,
+                subagent_id=subagent_id,
+                tmux_window_id=tmux_window_id,
+                agent_profile=enriched_agent_profile,
             )
 
         await asyncio.sleep(2)  # wait another 2s
@@ -291,16 +377,52 @@ async def _handoff_impl(
         # Send message to terminal
         _send_direct_input(terminal_id, message)
 
-        # Monitor until completion with timeout
-        if not await async_wait_until_terminal_status(
-            terminal_id, TerminalStatus.COMPLETED, timeout=timeout, polling_interval=1.0
-        ):
-            return HandoffResult(
-                success=False,
-                message=f"Handoff timed out after {timeout} seconds",
-                output=None,
-                terminal_id=terminal_id,
-            )
+        # Monitor until completion with timeout.
+        # While waiting, also poll for subagent_id from the pane's JSON event stream.
+        # OpenCode emits {"sessionID": "ses_..."} once it starts — we capture it
+        # during the wait rather than as a separate phase, since OpenCode startup
+        # can take longer than a fixed poll timeout.
+        if tmux_session_name and tmux_window_name:
+            print(f"🔍 [CAO-MCP] Will capture subagent_id during execution wait")
+
+        completion_poll_start = time.time()
+        while True:
+            elapsed = time.time() - completion_poll_start
+            if elapsed >= timeout:
+                return HandoffResult(
+                    success=False,
+                    message=f"Handoff timed out after {timeout} seconds",
+                    output=None,
+                    terminal_id=terminal_id,
+                    subagent_id=subagent_id,
+                    tmux_window_id=tmux_window_id,
+                    agent_profile=enriched_agent_profile,
+                )
+
+            # Try to capture subagent_id if we haven't yet
+            if not subagent_id and tmux_session_name and tmux_window_name:
+                subagent_id = _extract_session_id_from_pane(tmux_session_name, tmux_window_name)
+                if subagent_id:
+                    print(f"✅ [CAO-MCP] Captured subagent_id: {subagent_id}")
+
+            # Check if terminal completed
+            provider_instance = provider_manager.get_provider(terminal_id)
+            if provider_instance:
+                status = provider_instance.get_status()
+                if status == TerminalStatus.COMPLETED:
+                    break
+                if status == TerminalStatus.ERROR:
+                    break
+
+            await asyncio.sleep(1.0)
+
+        # One final attempt to capture subagent_id after completion
+        if not subagent_id and tmux_session_name and tmux_window_name:
+            subagent_id = _extract_session_id_from_pane(tmux_session_name, tmux_window_name)
+            if subagent_id:
+                print(f"✅ [CAO-MCP] Captured subagent_id (post-completion): {subagent_id}")
+            else:
+                logger.warning(f"sessionID not found in pane output for terminal {terminal_id}")
 
         # Get the response
         response = requests.get(
@@ -314,8 +436,8 @@ async def _handoff_impl(
         response = requests.post(f"{API_BASE_URL}/terminals/{terminal_id}/exit")
         response.raise_for_status()
 
-        # NUDGE: Notify the brain that work is done
-        _notify_brain(session_id or terminal_id, "handoff_completed", {"terminal_id": terminal_id, "output": output})
+        # No nudge for sync handoff — MCP tool response is the canonical back-path.
+        # The nudge is only used for async (assign) workflows.
 
         execution_time = time.time() - start_time
 
@@ -325,12 +447,16 @@ async def _handoff_impl(
             message=f"Successfully handed off to {agent_profile} ({provider}) in {execution_time:.2f}s",
             output=output,
             terminal_id=terminal_id,
+            subagent_id=subagent_id,
+            tmux_window_id=tmux_window_id,
+            agent_profile=enriched_agent_profile,
         )
 
     except Exception as e:
         print(f"❌ [CAO-MCP] Handoff Exception: {str(e)}")
         return HandoffResult(
-            success=False, message=f"Handoff failed: {str(e)}", output=None, terminal_id=None
+            success=False, message=f"Handoff failed: {str(e)}", output=None, terminal_id=None,
+            subagent_id=subagent_id, tmux_window_id=tmux_window_id, agent_profile=enriched_agent_profile,
         )
 
 
@@ -393,7 +519,10 @@ if ENABLE_WORKING_DIRECTORY:
             HandoffResult with success status, message, and agent output
         """
         session_id = _get_session_id(ctx) if ctx else None
-        return await _handoff_impl(agent_profile, message, timeout, working_directory, session_id)
+        result = await _handoff_impl(agent_profile, message, timeout, working_directory, session_id)
+        # Return HandoffResult directly — MCP response is the canonical back-path for sync handoff.
+        # Relay detects handoff results by checking for terminal_id + success fields in tool_result content.
+        return result
 
 else:
 
@@ -440,35 +569,60 @@ else:
             HandoffResult with success status, message, and agent output
         """
         session_id = _get_session_id(ctx) if ctx else None
-        return await _handoff_impl(agent_profile, message, timeout, None, session_id)
+        result = await _handoff_impl(agent_profile, message, timeout, None, session_id)
+        # Return HandoffResult directly — MCP response is the canonical back-path for sync handoff.
+        return result
 
 
 # Implementation function for assign
 def _assign_impl(
     agent_profile: str, message: str, working_directory: Optional[str] = None, session_id: Optional[str] = None
-) -> Dict[str, Any]:
+) -> HandoffResult:
     """Implementation of assign logic."""
+    # Initialize enriched fields (no wait loop, so no subagent_id capture)
+    subagent_id: Optional[str] = ""
+    tmux_window_id: Optional[int] = None
+    enriched_agent_profile: Optional[str] = None
+    tmux_session_name: Optional[str] = None
+    tmux_window_name: Optional[str] = None
+
     try:
         # Create terminal
         terminal_id, _ = _create_terminal(agent_profile, working_directory, session_id)
+
+        # Get terminal metadata for enriched fields
+        terminal_metadata = get_terminal_metadata(terminal_id)
+        if terminal_metadata:
+            tmux_session_name = terminal_metadata.get("tmux_session")
+            tmux_window_name = terminal_metadata.get("tmux_window")
+            enriched_agent_profile = terminal_metadata.get("agent_profile")
+            # Query actual tmux window index (window names are '{profile}-{uuid}', not 'window-N')
+            if tmux_session_name and tmux_window_name:
+                tmux_window_id = _resolve_tmux_window_index(tmux_session_name, tmux_window_name)
 
         # Send message immediately
         _send_direct_input(terminal_id, message)
 
         print(f"✅ [CAO-MCP] Assign success: terminal_id={terminal_id}")
-        return {
-            "success": True,
-            "terminal_id": terminal_id,
-            "message": f"Task assigned to {agent_profile} (terminal: {terminal_id})",
-        }
+        return HandoffResult(
+            success=True,
+            message=f"Task assigned to {agent_profile} (terminal: {terminal_id})",
+            terminal_id=terminal_id,
+            subagent_id=subagent_id,
+            tmux_window_id=tmux_window_id,
+            agent_profile=enriched_agent_profile,
+        )
 
     except Exception as e:
         print(f"❌ [CAO-MCP] Assign Exception: {str(e)}")
-        return {
-            "success": False,
-            "terminal_id": None,
-            "message": f"Assignment failed: {str(e)}",
-        }
+        return HandoffResult(
+            success=False,
+            message=f"Assignment failed: {str(e)}",
+            terminal_id=None,
+            subagent_id=subagent_id,
+            tmux_window_id=tmux_window_id,
+            agent_profile=enriched_agent_profile,
+        )
 
 
 # Conditional tool registration for assign
@@ -486,7 +640,7 @@ if ENABLE_WORKING_DIRECTORY:
             default=None, description="Optional working directory where the agent should execute"
         ),
         ctx: Context = None,
-    ) -> Dict[str, Any]:
+    ) -> HandoffResult:
         """Assigns a task to another agent without blocking.
 
         In the message to the worker agent include instruction to send results back via send_message tool.
@@ -506,10 +660,13 @@ if ENABLE_WORKING_DIRECTORY:
             working_directory: Optional directory path where agent should execute
 
         Returns:
-            Dict with success status, worker terminal_id, and message
+            HandoffResult with success status, worker terminal_id, and message
         """
         session_id = _get_session_id(ctx) if ctx else None
-        return await _assign_impl(agent_profile, message, working_directory, session_id)
+        result = await asyncio.to_thread(_assign_impl, agent_profile, message, working_directory, session_id)
+        # Return HandoffResult directly for consistency with handoff.
+        # Relay detects by checking for terminal_id + success fields.
+        return result
 
 else:
 
@@ -522,7 +679,7 @@ else:
             description="The task message to send. Include callback instructions for the worker to send results back."
         ),
         ctx: Context = None,
-    ) -> Dict[str, Any]:
+    ) -> HandoffResult:
         """Assigns a task to another agent without blocking.
 
         In the message to the worker agent include instruction to send results back via send_message tool.
@@ -535,10 +692,12 @@ else:
             message: Task message (include callback instructions)
 
         Returns:
-            Dict with success status, worker terminal_id, and message
+            HandoffResult with success status, worker terminal_id, and message
         """
         session_id = _get_session_id(ctx) if ctx else None
-        return await _assign_impl(agent_profile, message, None, session_id)
+        result = await asyncio.to_thread(_assign_impl, agent_profile, message, None, session_id)
+        # Return HandoffResult directly for consistency with handoff.
+        return result
 
 
 @mcp.tool()
@@ -566,9 +725,72 @@ async def send_message(
         print(f"📬 [CAO-MCP] Sending message to {receiver_id}...")
         res = _send_to_inbox(receiver_id, message, sender_id=sender_id)
         print(f"✅ [CAO-MCP] Message sent to {receiver_id}")
+
+        # Nudge the receiver's brain (Poco) that a subagent has an update.
+        # This is the async callback path: worker finishes → send_message → nudge → Poco checks inbox.
+        # We use the receiver's delegating_agent_id (the OpenCode session that owns the receiver terminal)
+        # to route the nudge to the correct OpenCode session.
+        try:
+            receiver_meta = get_terminal_metadata(receiver_id)
+            if receiver_meta:
+                delegating_agent_id = receiver_meta.get("delegating_agent_id")
+                if delegating_agent_id:
+                    _notify_brain(
+                        delegating_agent_id,
+                        "subagent_message",
+                        {
+                            "sender_id": sender_id or "unknown",
+                            "receiver_id": receiver_id,
+                            "preview": message[:200],
+                        },
+                    )
+        except Exception as e:
+            logger.warning(f"Failed to nudge brain after send_message: {e}")
+
         return res
     except Exception as e:
         print(f"❌ [CAO-MCP] send_message Exception: {str(e)}")
+        return {"success": False, "error": str(e)}
+
+
+@mcp.tool()
+async def check_inbox(
+    terminal_id: Optional[str] = Field(
+        default=None,
+        description="Terminal ID to check inbox for. If not provided, checks your own inbox (CAO_TERMINAL_ID).",
+    ),
+    limit: int = Field(default=10, description="Maximum number of messages to retrieve"),
+    ctx: Context = None,
+) -> Dict[str, Any]:
+    """Check inbox for messages from subagents or other terminals.
+
+    Use this tool when you receive a notification that a subagent has sent you a message,
+    or to poll for async task results.
+
+    Args:
+        terminal_id: Terminal ID to check (defaults to your own)
+        limit: Max messages to return
+
+    Returns:
+        Dict with messages list and count
+    """
+    target_id = terminal_id or os.getenv("CAO_TERMINAL_ID")
+    if not target_id:
+        return {"success": False, "error": "No terminal_id provided and CAO_TERMINAL_ID not set"}
+
+    print(f"🎬 [CAO-MCP] Tool Call: check_inbox(terminal_id={target_id}, limit={limit})")
+    try:
+        response = requests.get(
+            f"{API_BASE_URL}/terminals/{target_id}/inbox/messages",
+            params={"limit": limit},
+            timeout=5.0,
+        )
+        response.raise_for_status()
+        messages = response.json()
+        print(f"📬 [CAO-MCP] Found {len(messages)} inbox messages for {target_id}")
+        return {"success": True, "terminal_id": target_id, "messages": messages, "count": len(messages)}
+    except Exception as e:
+        print(f"❌ [CAO-MCP] check_inbox Exception: {str(e)}")
         return {"success": False, "error": str(e)}
 
 

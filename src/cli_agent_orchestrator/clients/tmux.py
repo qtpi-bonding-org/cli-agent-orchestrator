@@ -50,7 +50,6 @@ class TmuxClient:
         window_name: str,
         terminal_id: str,
         working_directory: Optional[str] = None,
-        chat_id: Optional[str] = None,
     ) -> str:
         """Create detached tmux session with initial window and return window name."""
         try:
@@ -58,8 +57,6 @@ class TmuxClient:
 
             environment = os.environ.copy()
             environment["CAO_TERMINAL_ID"] = terminal_id
-            if chat_id:
-                environment["POCKETCODER_CHAT_ID"] = chat_id
 
             session = self.server.new_session(
                 session_name=session_name,
@@ -85,7 +82,6 @@ class TmuxClient:
         window_name: str,
         terminal_id: str,
         working_directory: Optional[str] = None,
-        chat_id: Optional[str] = None,
     ) -> str:
         """Create window in session and return window name."""
         try:
@@ -96,8 +92,6 @@ class TmuxClient:
                 raise ValueError(f"Session '{session_name}' not found")
 
             env = {"CAO_TERMINAL_ID": terminal_id}
-            if chat_id:
-                env["POCKETCODER_CHAT_ID"] = chat_id
 
             window = session.new_window(
                 window_name=window_name,
@@ -261,6 +255,41 @@ class TmuxClient:
             return None
         except Exception as e:
             logger.error(f"Failed to get working directory for {session_name}:{window_name}: {e}")
+            return None
+
+    def get_pane_environment_variable(self, session_name: str, window_name: str, var_name: str) -> Optional[str]:
+        """Get an environment variable from a tmux pane.
+
+        Args:
+            session_name: Name of tmux session
+            window_name: Name of window in session
+            var_name: Name of the environment variable to retrieve
+
+        Returns:
+            The value of the environment variable, or None if not found
+        """
+        try:
+            target = f"{session_name}:{window_name}"
+            result = subprocess.run(
+                ["tmux", "-S", self.socket_path, "show-environment", "-t", target, var_name],
+                capture_output=True,
+                text=True,
+                check=True,
+            )
+            # Output format is "VAR_NAME=value" or "VAR_NAME=undefined" if not set
+            output = result.stdout.strip()
+            if output.endswith("=undefined"):
+                logger.debug(f"Environment variable {var_name} not set in {target}")
+                return None
+            # Parse the value after '='
+            if "=" in output:
+                return output.split("=", 1)[1]
+            return None
+        except subprocess.CalledProcessError as e:
+            logger.debug(f"Failed to get environment variable {var_name} from {session_name}:{window_name}: {e}")
+            return None
+        except Exception as e:
+            logger.error(f"Error getting environment variable {var_name} from {session_name}:{window_name}: {e}")
             return None
 
     def pipe_pane(self, session_name: str, window_name: str, file_path: str) -> None:
