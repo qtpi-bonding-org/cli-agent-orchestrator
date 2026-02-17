@@ -6,6 +6,7 @@ build/
 dist/
 *.egg-info/
 .venv/
+.hypothesis/
 
 # Testing
 .coverage
@@ -29,3 +30,4 @@ dist/
 
 # Memory
 context/
+
