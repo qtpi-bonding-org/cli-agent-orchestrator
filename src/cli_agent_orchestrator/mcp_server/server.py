@@ -14,7 +14,7 @@ from pydantic import Field
 
 from cli_agent_orchestrator.clients.database import get_terminal_metadata
 from cli_agent_orchestrator.clients.tmux import tmux_client
-from cli_agent_orchestrator.constants import API_BASE_URL, DEFAULT_PROVIDER
+from cli_agent_orchestrator.constants import PUBLIC_URL, DEFAULT_PROVIDER
 from cli_agent_orchestrator.mcp_server.models import HandoffResult
 from cli_agent_orchestrator.models.terminal import TerminalStatus
 from cli_agent_orchestrator.providers.manager import provider_manager
@@ -109,7 +109,7 @@ def _create_terminal(
 
     if not current_terminal_id and session_id:
         try:
-            response = requests.get(f"{API_BASE_URL}/terminals/by-delegating-agent/{session_id}")
+            response = requests.get(f"{PUBLIC_URL}/terminals/by-delegating-agent/{session_id}")
             if response.status_code == 200:
                 current_terminal_id = response.json().get("id")
                 logger.info(f"Resolved terminal {current_terminal_id} from session {session_id}")
@@ -118,7 +118,7 @@ def _create_terminal(
 
     if current_terminal_id:
         # Get terminal metadata via API
-        response = requests.get(f"{API_BASE_URL}/terminals/{current_terminal_id}")
+        response = requests.get(f"{PUBLIC_URL}/terminals/{current_terminal_id}")
         response.raise_for_status()
         terminal_metadata = response.json()
 
@@ -129,7 +129,7 @@ def _create_terminal(
         if working_directory is None:
             try:
                 response = requests.get(
-                    f"{API_BASE_URL}/terminals/{current_terminal_id}/working-directory"
+                    f"{PUBLIC_URL}/terminals/{current_terminal_id}/working-directory"
                 )
                 if response.status_code == 200:
                     working_directory = response.json().get("working_directory")
@@ -152,14 +152,14 @@ def _create_terminal(
         session_name = f"pc-{session_id}"
         # Check if session already exists in CAO
         try:
-            resp = requests.get(f"{API_BASE_URL}/sessions/{session_name}")
+            resp = requests.get(f"{PUBLIC_URL}/sessions/{session_name}")
             if resp.status_code == 200:
                 # Session exists, create terminal in it
                 params = {"provider": provider, "agent_profile": agent_profile, "delegating_agent_id": session_id}
                 if working_directory:
                     params["working_directory"] = working_directory
                 
-                response = requests.post(f"{API_BASE_URL}/sessions/{session_name}/terminals", params=params)
+                response = requests.post(f"{PUBLIC_URL}/sessions/{session_name}/terminals", params=params)
                 response.raise_for_status()
                 terminal = response.json()
                 return terminal["id"], provider
@@ -176,12 +176,12 @@ def _create_terminal(
         if working_directory:
             params["working_directory"] = working_directory
 
-        response = requests.post(f"{API_BASE_URL}/sessions", params=params)
+        response = requests.post(f"{PUBLIC_URL}/sessions", params=params)
         response.raise_for_status()
         terminal = response.json()
     elif current_terminal_id:
         # Get terminal metadata via API
-        response = requests.get(f"{API_BASE_URL}/terminals/{current_terminal_id}")
+        response = requests.get(f"{PUBLIC_URL}/terminals/{current_terminal_id}")
         response.raise_for_status()
         terminal_metadata = response.json()
 
@@ -192,7 +192,7 @@ def _create_terminal(
         if working_directory is None:
             try:
                 response = requests.get(
-                    f"{API_BASE_URL}/terminals/{current_terminal_id}/working-directory"
+                    f"{PUBLIC_URL}/terminals/{current_terminal_id}/working-directory"
                 )
                 if response.status_code == 200:
                     working_directory = response.json().get("working_directory")
@@ -207,7 +207,7 @@ def _create_terminal(
         if working_directory:
             params["working_directory"] = working_directory
 
-        response = requests.post(f"{API_BASE_URL}/sessions/{session_name}/terminals", params=params)
+        response = requests.post(f"{PUBLIC_URL}/sessions/{session_name}/terminals", params=params)
         response.raise_for_status()
         terminal = response.json()
     else:
@@ -221,7 +221,7 @@ def _create_terminal(
         if working_directory:
             params["working_directory"] = working_directory
 
-        response = requests.post(f"{API_BASE_URL}/sessions", params=params)
+        response = requests.post(f"{PUBLIC_URL}/sessions", params=params)
         response.raise_for_status()
         terminal = response.json()
 
@@ -239,7 +239,7 @@ def _send_direct_input(terminal_id: str, message: str) -> None:
         Exception: If sending fails
     """
     response = requests.post(
-        f"{API_BASE_URL}/terminals/{terminal_id}/input", json={"message": message}
+        f"{PUBLIC_URL}/terminals/{terminal_id}/input", json={"message": message}
     )
     response.raise_for_status()
 
@@ -266,7 +266,7 @@ def _send_to_inbox(receiver_id: str, message: str, sender_id: Optional[str] = No
         raise ValueError("Sender identity not found (no CAO_TERMINAL_ID and no explicit sender)")
 
     response = requests.post(
-        f"{API_BASE_URL}/terminals/{receiver_id}/inbox/messages",
+        f"{PUBLIC_URL}/terminals/{receiver_id}/inbox/messages",
         params={"sender_id": sender_id, "message": message},
     )
     response.raise_for_status()
@@ -289,7 +289,7 @@ async def _resolve_sender_id(session_id: Optional[str]) -> Optional[str]:
         return os.getenv("CAO_TERMINAL_ID")
     
     try:
-        response = requests.get(f"{API_BASE_URL}/terminals/by-delegating-agent/{session_id}")
+        response = requests.get(f"{PUBLIC_URL}/terminals/by-delegating-agent/{session_id}")
         if response.status_code == 200:
             return response.json().get("id")
     except:
@@ -394,14 +394,14 @@ async def _handoff_impl(
 
         # Get the response
         response = requests.get(
-            f"{API_BASE_URL}/terminals/{terminal_id}/output", params={"mode": "last"}
+            f"{PUBLIC_URL}/terminals/{terminal_id}/output", params={"mode": "last"}
         )
         response.raise_for_status()
         output_data = response.json()
         output = output_data["output"]
 
         # Send provider-specific exit command to cleanup terminal
-        response = requests.post(f"{API_BASE_URL}/terminals/{terminal_id}/exit")
+        response = requests.post(f"{PUBLIC_URL}/terminals/{terminal_id}/exit")
         response.raise_for_status()
 
         # No nudge for sync handoff — MCP tool response is the canonical back-path.
@@ -728,7 +728,7 @@ async def check_inbox(
     print(f"🎬 [CAO-MCP] Tool Call: check_inbox(terminal_id={target_id}, limit={limit})")
     try:
         response = requests.get(
-            f"{API_BASE_URL}/terminals/{target_id}/inbox/messages",
+            f"{PUBLIC_URL}/terminals/{target_id}/inbox/messages",
             params={"limit": limit},
             timeout=5.0,
         )
@@ -755,7 +755,13 @@ def main():
     if transport == "sse":
         print(f"🚀 [CAO-MCP] Starting SSE Server on 0.0.0.0:{port}")
         print(f"📡 [CAO-MCP] Endpoint will be: http://0.0.0.0:{port}/sse")
-        mcp.run(transport="sse", port=port, host="0.0.0.0")
+        mcp.run(
+            transport="sse",
+            port=port,
+            host="0.0.0.0",
+            sse_path="/sse",
+            message_path=f"{PUBLIC_URL.rstrip('/')}/messages/",
+        )
     elif transport == "http":
         print(f"🚀 [CAO-MCP] Starting HTTP Server on 0.0.0.0:{port}")
         mcp.run(transport="http", port=port, host="0.0.0.0")
