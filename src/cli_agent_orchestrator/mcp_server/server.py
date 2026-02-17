@@ -273,38 +273,6 @@ def _send_to_inbox(receiver_id: str, message: str, sender_id: Optional[str] = No
     return response.json()
 
 
-def _notify_brain(session_id: str, event_type: str, payload: Dict[str, Any] = None):
-    """Notify the brain (OpenCode/Poco) via Proxy that a subagent has an update.
-    
-    Used only for async workflows (assign + send_message callback).
-    The nudge tells Poco to check its inbox using the check_inbox tool.
-    """
-    try:
-        proxy_url = os.getenv("PROXY_URL", "http://proxy:3001")
-        
-        # Build a specific, actionable nudge message
-        sender = payload.get("sender_id", "unknown") if payload else "unknown"
-        preview = payload.get("preview", "") if payload else ""
-        nudge_text = (
-            f"[Subagent Update] Terminal {sender} sent you a message. "
-            f"Use the check_inbox tool to read it."
-        )
-        if preview:
-            nudge_text += f"\nPreview: {preview[:100]}"
-        
-        requests.post(
-            f"{proxy_url}/notify",
-            json={
-                "session_id": session_id,
-                "event_type": event_type,
-                "payload": {"nudge_text": nudge_text, **(payload or {})}
-            },
-            timeout=2.0
-        )
-    except Exception as e:
-        logger.warning(f"Failed to notify brain: {e}")
-
-
 def _get_session_id(ctx: Context) -> Optional[str]:
     """Extract session_id from FastMCP context (query params)."""
     try:
@@ -725,27 +693,6 @@ async def send_message(
         print(f"📬 [CAO-MCP] Sending message to {receiver_id}...")
         res = _send_to_inbox(receiver_id, message, sender_id=sender_id)
         print(f"✅ [CAO-MCP] Message sent to {receiver_id}")
-
-        # Nudge the receiver's brain (Poco) that a subagent has an update.
-        # This is the async callback path: worker finishes → send_message → nudge → Poco checks inbox.
-        # We use the receiver's delegating_agent_id (the OpenCode session that owns the receiver terminal)
-        # to route the nudge to the correct OpenCode session.
-        try:
-            receiver_meta = get_terminal_metadata(receiver_id)
-            if receiver_meta:
-                delegating_agent_id = receiver_meta.get("delegating_agent_id")
-                if delegating_agent_id:
-                    _notify_brain(
-                        delegating_agent_id,
-                        "subagent_message",
-                        {
-                            "sender_id": sender_id or "unknown",
-                            "receiver_id": receiver_id,
-                            "preview": message[:200],
-                        },
-                    )
-        except Exception as e:
-            logger.warning(f"Failed to nudge brain after send_message: {e}")
 
         return res
     except Exception as e:

@@ -10,6 +10,7 @@ from cli_agent_orchestrator.providers.claude_code import ClaudeCodeProvider
 from cli_agent_orchestrator.providers.codex import CodexProvider
 from cli_agent_orchestrator.providers.kiro_cli import KiroCliProvider
 from cli_agent_orchestrator.providers.opencode import OpenCodeProvider
+from cli_agent_orchestrator.providers.opencode_attach import OpenCodeAttachProvider
 from cli_agent_orchestrator.providers.q_cli import QCliProvider
 
 logger = logging.getLogger(__name__)
@@ -46,6 +47,10 @@ class ProviderManager:
                 provider = CodexProvider(terminal_id, tmux_session, tmux_window, agent_profile)
             elif provider_type == ProviderType.OPENCODE.value:
                 provider = OpenCodeProvider(
+                    terminal_id, tmux_session, tmux_window, agent_profile
+                )
+            elif provider_type == ProviderType.OPENCODE_ATTACH.value:
+                provider = OpenCodeAttachProvider(
                     terminal_id, tmux_session, tmux_window, agent_profile
                 )
             else:
