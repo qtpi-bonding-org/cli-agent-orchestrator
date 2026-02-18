@@ -759,8 +759,6 @@ def main():
             transport="sse",
             port=port,
             host="0.0.0.0",
-            sse_path="/sse",
-            message_path=f"{PUBLIC_URL.rstrip('/')}/messages/",
         )
     elif transport == "http":
         print(f"🚀 [CAO-MCP] Starting HTTP Server on 0.0.0.0:{port}")
