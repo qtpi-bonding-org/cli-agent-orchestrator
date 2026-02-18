@@ -49,6 +49,6 @@ SERVER_HOST = os.getenv("CAO_SERVER_HOST", "localhost")
 SERVER_PORT = int(os.getenv("CAO_SERVER_PORT", "9889"))
 SERVER_VERSION = "0.1.0"
 API_BASE_URL = f"http://{SERVER_HOST}:{SERVER_PORT}"
-# Allow override via PUBLIC_URL (e.g., http://proxy:3001/mcp)
+# Allow override via PUBLIC_URL (e.g., http://sandbox:3001)
 PUBLIC_URL = os.getenv("PUBLIC_URL", API_BASE_URL)
 CORS_ORIGINS = ["http://localhost:3000", "http://127.0.0.1:3000"]
