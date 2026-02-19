@@ -149,7 +149,7 @@ def _create_terminal(
         if working_directory:
             params["working_directory"] = working_directory
     if session_id:
-        session_name = f"pc-{session_id}"
+        session_name = session_id
         # Check if session already exists in CAO
         try:
             resp = requests.get(f"{PUBLIC_URL}/sessions/{session_name}")

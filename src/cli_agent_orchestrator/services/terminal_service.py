@@ -51,10 +51,6 @@ def create_terminal(
         window_name = generate_window_name(agent_profile)
 
         if new_session:
-            # Apply SESSION_PREFIX if not already present
-            if not session_name.startswith(SESSION_PREFIX):
-                session_name = f"{SESSION_PREFIX}{session_name}"
-
             # Check if session already exists
             if tmux_client.session_exists(session_name):
                 raise ValueError(f"Session '{session_name}' already exists")

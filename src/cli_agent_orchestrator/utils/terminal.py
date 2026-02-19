@@ -19,9 +19,9 @@ logger = logging.getLogger(__name__)
 
 
 def generate_session_name() -> str:
-    """Generate a unique session name with SESSION_PREFIX."""
+    """Generate a unique session name."""
     session_uuid = uuid.uuid4().hex[:8]
-    return f"{SESSION_PREFIX}{session_uuid}"
+    return session_uuid
 
 
 def generate_terminal_id() -> str:
