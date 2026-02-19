@@ -50,49 +50,12 @@ class OpenCodeAttachProvider(BaseProvider):
         tmux_client.send_keys(self.session_name, self.window_name, message)
 
     def get_status(self, tail_lines: Optional[int] = None) -> TerminalStatus:
-        """Get OpenCode Attach TUI status by analyzing terminal pane output.
-
-        Captures the pane, strips ANSI codes, and matches against status patterns:
-        - IDLE: (agents|commands) at end of line, no spinner
-        - PROCESSING: esc interrupt/again to interrupt visible
-        - RETRY: [retrying...attempt #N] pattern
-        - ERROR: No IDLE/PROCESSING match + error text
-
-        Args:
-            tail_lines: Optional number of lines to capture from pane
-
-        Returns:
-            TerminalStatus: Current status of the TUI
+        """Always return IDLE for the OpenCode Attach TUI.
+        
+        The OpenCode engine natively handles message batching and queuing.
+        The attach TUI is strictly a presentation layer that is always ready 
+        to receive input keys, which are then relayed to the server's internal queue.
         """
-        # Capture pane output using get_history (which wraps capture-pane)
-        output = tmux_client.get_history(self.session_name, self.window_name, tail_lines=tail_lines)
-
-        if not output or not output.strip():
-            return TerminalStatus.IDLE
-
-        # Strip ANSI escape codes for pattern matching
-        clean_output = ANSI_PATTERN.sub('', output)
-
-        # Check for RETRY pattern first (explicit error with retry)
-        if RETRY_PATTERN.search(clean_output):
-            return TerminalStatus.ERROR
-
-        # Check for PROCESSING pattern (spinner active, interrupt hint visible)
-        # PROCESSING takes precedence over IDLE
-        if PROCESSING_PATTERN.search(clean_output):
-            return TerminalStatus.PROCESSING
-
-        # Check for IDLE pattern (agent/commands prompt visible, no spinner)
-        if IDLE_PATTERN.search(clean_output):
-            return TerminalStatus.IDLE
-
-        # Fallback: if no IDLE/PROCESSING match but there's error-like text
-        # (contains "error", "failed", "exception", etc.)
-        error_indicators = ['error', 'failed', 'exception', 'traceback']
-        if any(indicator in clean_output.lower() for indicator in error_indicators):
-            return TerminalStatus.ERROR
-
-        # Default to IDLE if we can't determine status (TUI is likely at prompt)
         return TerminalStatus.IDLE
 
     def extract_last_message_from_script(self, script_output: str) -> str:
@@ -154,12 +117,12 @@ class OpenCodeAttachProvider(BaseProvider):
         return result
 
     def get_idle_pattern_for_log(self) -> str:
-        """Return a pattern to search for in logs to detect IDLE status.
+        """Return a universal match pattern to ensure immediate delivery.
 
         Returns:
-            str: Regex pattern for IDLE state detection
+            str: Regex pattern matching any output
         """
-        return r'(agents|commands)\s*$'
+        return ".*"
 
     def exit_cli(self) -> str:
         """Get the command to exit the opencode attach TUI.
