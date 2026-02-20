@@ -168,7 +168,12 @@ class OpenCodeProvider(BaseProvider):
         logger.debug(f"OpenCode extractor: Extracted {len(all_text_parts)} text parts. Length: {len(final_answer)}")
 
         if not final_answer:
-            raise ValueError("No text found in OpenCode output for the last message turn")
+            # If we couldn't parse JSON text blocks, it likely crashed or spat out raw text.
+            # Return the cleaned raw output so the orchestrator can see the error.
+            fallback_text = clean_output.strip()
+            if not fallback_text:
+                fallback_text = script_output.strip()
+            return fallback_text
 
         return final_answer.strip()
 

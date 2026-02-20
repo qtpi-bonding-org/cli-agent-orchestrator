@@ -39,6 +39,7 @@ def create_terminal(
     new_session: bool = False,
     working_directory: Optional[str] = None,
     delegating_agent_id: Optional[str] = None,
+    target_window_name: Optional[str] = None,
 ) -> Terminal:
     """Create terminal, optionally creating new session with it."""
     try:
@@ -48,7 +49,10 @@ def create_terminal(
         if not session_name:
             session_name = generate_session_name()
 
-        window_name = generate_window_name(agent_profile)
+        if target_window_name:
+            window_name = target_window_name
+        else:
+            window_name = generate_window_name(agent_profile)
 
         if new_session:
             # Check if session already exists

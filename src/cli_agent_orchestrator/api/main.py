@@ -134,6 +134,7 @@ async def create_session(
     session_name: Optional[str] = None,
     working_directory: Optional[str] = None,
     delegating_agent_id: Optional[str] = None,
+    target_window_name: Optional[str] = None,
 ) -> Terminal:
     """Create a new session with exactly one terminal."""
     try:
@@ -144,6 +145,7 @@ async def create_session(
             new_session=True,
             working_directory=working_directory,
             delegating_agent_id=delegating_agent_id,
+            target_window_name=target_window_name,
         )
         return result
 
