@@ -133,7 +133,10 @@ class OpenCodeProvider(BaseProvider):
             except json.JSONDecodeError:
                 pos = start + 1
 
-        logger.debug(f"OpenCode extractor: Found {len(json_objects)} JSON objects in history")
+        logger.info(f"OpenCode extractor: Found {len(json_objects)} JSON objects in history")
+        if json_objects:
+             logger.debug(f"First JSON types: {[o.get('type') for o in json_objects[:5]]}")
+             logger.debug(f"Last JSON types: {[o.get('type') for o in json_objects[-5:]]}")
 
         # 2. Find the last sessionID/messageID from a step_finish event
         last_message_id = None
@@ -142,6 +145,7 @@ class OpenCodeProvider(BaseProvider):
             if etype == "step_finish":
                  last_message_id = event.get("messageID") or event.get("part", {}).get("messageID")
                  if last_message_id:
+                      logger.info(f"OpenCode extractor: Found last_message_id={last_message_id}")
                       break
 
         all_text_parts = []
@@ -165,7 +169,9 @@ class OpenCodeProvider(BaseProvider):
                            all_text_parts.append(text)
         
         final_answer = "".join(all_text_parts).strip()
-        logger.debug(f"OpenCode extractor: Extracted {len(all_text_parts)} text parts. Length: {len(final_answer)}")
+        logger.info(f"OpenCode extractor: Extracted {len(all_text_parts)} text parts for message {last_message_id}. Final length: {len(final_answer)}")
+        if final_answer:
+             logger.debug(f"Final answer preview: {final_answer[:100]}...")
 
         if not final_answer:
             # If we couldn't parse JSON text blocks, it likely crashed or spat out raw text.
