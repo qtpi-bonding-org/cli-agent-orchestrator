@@ -309,10 +309,10 @@ async def send_terminal_input(terminal_id: TerminalId, request: TerminalInputReq
 
 @app.get("/terminals/{terminal_id}/output", response_model=TerminalOutputResponse)
 async def get_terminal_output(
-    terminal_id: TerminalId, mode: OutputMode = OutputMode.FULL
+    terminal_id: TerminalId, mode: OutputMode = OutputMode.FULL, tail_lines: Optional[int] = Query(default=None)
 ) -> TerminalOutputResponse:
     try:
-        output = terminal_service.get_output(terminal_id, mode)
+        output = terminal_service.get_output(terminal_id, mode, tail_lines=tail_lines)
         return TerminalOutputResponse(output=output, mode=mode)
     except ValueError as e:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(e))

@@ -29,3 +29,12 @@ class HandoffResult(BaseModel):
     subagent_id: Optional[str] = Field(None, description="The OpenCode session ID of the subagent")
     tmux_window_id: Optional[int] = Field(None, description="The numeric tmux window index")
     agent_profile: Optional[str] = Field(None, description="The agent profile used for the handoff")
+
+
+class CheckTerminalResult(BaseModel):
+    """Result of checking a terminal's status and output."""
+
+    success: bool = Field(description="Whether the status check was successful")
+    status: str = Field(description="The current status of the terminal (e.g., IDLE, PROCESSING, COMPLETED, ERROR)")
+    message: str = Field(description="A message describing the result of the check")
+    output: Optional[str] = Field(None, description="The tailed output from the terminal")

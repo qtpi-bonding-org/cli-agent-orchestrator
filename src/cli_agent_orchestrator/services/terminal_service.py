@@ -30,6 +30,7 @@ class OutputMode(str, Enum):
 
     FULL = "full"
     LAST = "last"
+    TAIL = "tail"
 
 
 def create_terminal(
@@ -192,14 +193,14 @@ def send_input(terminal_id: str, message: str) -> bool:
         raise
 
 
-def get_output(terminal_id: str, mode: OutputMode = OutputMode.FULL) -> str:
+def get_output(terminal_id: str, mode: OutputMode = OutputMode.FULL, tail_lines: Optional[int] = None) -> str:
     """Get terminal output."""
     try:
         metadata = get_terminal_metadata(terminal_id)
         if not metadata:
             raise ValueError(f"Terminal '{terminal_id}' not found")
 
-        full_output = tmux_client.get_history(metadata["tmux_session"], metadata["tmux_window"])
+        full_output = tmux_client.get_history(metadata["tmux_session"], metadata["tmux_window"], tail_lines)
 
         if mode == OutputMode.FULL:
             return full_output
@@ -208,6 +209,8 @@ def get_output(terminal_id: str, mode: OutputMode = OutputMode.FULL) -> str:
             if provider is None:
                 raise ValueError(f"Provider not found for terminal {terminal_id}")
             return provider.extract_last_message_from_script(full_output)
+        elif mode == OutputMode.TAIL:
+            return full_output
 
     except Exception as e:
         logger.error(f"Failed to get output from terminal {terminal_id}: {e}")

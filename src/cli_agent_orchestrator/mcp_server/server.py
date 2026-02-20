@@ -593,6 +593,60 @@ def _assign_impl(
         )
 
 
+def _check_terminal_impl(terminal_id: str, tail_lines: int) -> "CheckTerminalResult":
+    from cli_agent_orchestrator.mcp_server.models import CheckTerminalResult
+    try:
+        # Fetch status
+        resp_status = requests.get(f"{PUBLIC_URL}/terminals/{terminal_id}")
+        resp_status.raise_for_status()
+        status_data = resp_status.json()
+        current_status = status_data.get("status", "UNKNOWN")
+
+        # Fetch output history
+        resp_output = requests.get(f"{PUBLIC_URL}/terminals/{terminal_id}/output", params={"mode": "tail", "tail_lines": tail_lines})
+        resp_output.raise_for_status()
+        output_data = resp_output.json()
+        
+        return CheckTerminalResult(
+            success=True,
+            status=current_status,
+            message=f"Successfully fetched terminal {terminal_id} status",
+            output=output_data.get("output", "")
+        )
+    except Exception as e:
+        logger.error(f"Failed to check terminal {terminal_id}: {e}")
+        return CheckTerminalResult(
+            success=False,
+            status="ERROR",
+            message=f"Failed to check terminal: {str(e)}",
+            output=None
+        )
+
+
+@mcp.tool()
+async def check_terminal(
+    terminal_id: str = Field(description="The 8-character terminal ID to check (e.g., from a previous assign)"),
+    tail_lines: int = Field(default=100, description="Number of recent terminal lines to capture", ge=1, le=1000),
+    ctx: Context = None,
+):
+    """Check the status and tail the logs of a background terminal.
+
+    Use this tool to monitor the progress of a task you previously assigned to another agent.
+    You will receive the terminal's execution state (IDLE, PROCESSING, COMPLETED, ERROR) 
+    and the most recent lines of output from its terminal history.
+
+    Args:
+        terminal_id: Terminal ID to check
+        tail_lines: How many recent lines to fetch
+
+    Returns:
+        CheckTerminalResult with status and output payload.
+    """
+    from cli_agent_orchestrator.mcp_server.models import CheckTerminalResult
+    result = await asyncio.to_thread(_check_terminal_impl, terminal_id, tail_lines)
+    return result
+
+
 # Conditional tool registration for assign
 if ENABLE_WORKING_DIRECTORY:
 
