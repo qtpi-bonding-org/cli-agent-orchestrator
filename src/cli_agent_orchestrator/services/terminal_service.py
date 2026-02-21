@@ -41,6 +41,7 @@ def create_terminal(
     working_directory: Optional[str] = None,
     delegating_agent_id: Optional[str] = None,
     target_window_name: Optional[str] = None,
+    initial_message: Optional[str] = None,
 ) -> Terminal:
     """Create terminal, optionally creating new session with it."""
     try:
@@ -74,7 +75,7 @@ def create_terminal(
 
         # Save terminal metadata to database
         db_create_terminal(
-            terminal_id, session_name, window_name, provider, agent_profile, delegating_agent_id
+            terminal_id, session_name, window_name, provider, agent_profile, delegating_agent_id, initial_message
         )
 
         # Initialize provider
@@ -95,6 +96,7 @@ def create_terminal(
             session_name=session_name,
             agent_profile=agent_profile,
             delegating_agent_id=delegating_agent_id,
+            initial_message=initial_message,
             status=TerminalStatus.IDLE,
             last_active=datetime.now(),
         )
@@ -133,12 +135,45 @@ def get_terminal(terminal_id: str) -> Dict:
             "provider": metadata["provider"],
             "session_name": metadata["tmux_session"],
             "agent_profile": metadata["agent_profile"],
+            "delegating_agent_id": metadata.get("delegating_agent_id"),
+            "initial_message": metadata.get("initial_message"),
             "status": status,
             "last_active": metadata["last_active"],
         }
 
     except Exception as e:
         logger.error(f"Failed to get terminal {terminal_id}: {e}")
+        raise
+
+
+def list_workers(session_name: str) -> list[Dict]:
+    """List all workers in a session, enriched with their live status."""
+    try:
+        from cli_agent_orchestrator.clients.database import list_terminals_by_session
+        terminals_metadata = list_terminals_by_session(session_name)
+        workers = []
+        for metadata in terminals_metadata:
+            status = TerminalStatus.IDLE.value # default fallback
+            try:
+                provider_instance = provider_manager.get_provider(metadata["id"])
+                if provider_instance:
+                    status = provider_instance.get_status().value
+            except Exception as e:
+                logger.warning(f"Failed to get live status for {metadata['id']}: {e}")
+            
+            workers.append({
+                "id": metadata["id"],
+                "name": metadata["tmux_window"],
+                "provider": metadata["provider"],
+                "session_name": metadata["tmux_session"],
+                "agent_profile": metadata["agent_profile"],
+                "initial_message": metadata.get("initial_message"),
+                "status": status,
+                "last_active": metadata["last_active"],
+            })
+        return workers
+    except Exception as e:
+        logger.error(f"Failed to list workers for session {session_name}: {e}")
         raise
 
 

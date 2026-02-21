@@ -31,6 +31,7 @@ class Terminal(BaseModel):
     session_name: str = Field(..., description="Session name")
     agent_profile: Optional[str] = Field(None, description="Agent profile")
     delegating_agent_id: Optional[str] = Field(None, description="Delegating agent's session ID")
+    initial_message: Optional[str] = Field(None, description="The initial task/message assigned to this terminal")
     status: Optional[TerminalStatus] = Field(
         None, description="Current terminal status (live only)"
     )

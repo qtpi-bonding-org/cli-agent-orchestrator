@@ -27,6 +27,7 @@ class TerminalModel(Base):
     provider = Column(String, nullable=False)  # "q_cli", "claude_code"
     agent_profile = Column(String)  # "developer", "reviewer" (optional)
     delegating_agent_id = Column(String)  # "ses_..."
+    initial_message = Column(String) # The initial task assigned to this terminal
     last_active = Column(DateTime, default=datetime.now)
 
 
@@ -77,6 +78,7 @@ def create_terminal(
     provider: str,
     agent_profile: Optional[str] = None,
     delegating_agent_id: Optional[str] = None,
+    initial_message: Optional[str] = None,
 ) -> Dict[str, Any]:
     """Create terminal metadata record."""
     with SessionLocal() as db:
@@ -87,6 +89,7 @@ def create_terminal(
             provider=provider,
             agent_profile=agent_profile,
             delegating_agent_id=delegating_agent_id,
+            initial_message=initial_message,
         )
         db.add(terminal)
         db.commit()
@@ -97,6 +100,7 @@ def create_terminal(
             "provider": terminal.provider,
             "agent_profile": terminal.agent_profile,
             "delegating_agent_id": terminal.delegating_agent_id,
+            "initial_message": terminal.initial_message,
         }
 
 
@@ -117,6 +121,7 @@ def get_terminal_metadata(terminal_id: str) -> Optional[Dict[str, Any]]:
             "provider": terminal.provider,
             "agent_profile": terminal.agent_profile,
             "delegating_agent_id": terminal.delegating_agent_id,
+            "initial_message": terminal.initial_message,
             "last_active": terminal.last_active,
         }
 
@@ -138,6 +143,7 @@ def get_terminal_by_delegating_agent(delegating_agent_id: str) -> Optional[Dict[
             "provider": terminal.provider,
             "agent_profile": terminal.agent_profile,
             "delegating_agent_id": terminal.delegating_agent_id,
+            "initial_message": terminal.initial_message,
             "last_active": terminal.last_active,
         }
 
@@ -153,6 +159,7 @@ def list_terminals_by_session(tmux_session: str) -> List[Dict[str, Any]]:
                 "tmux_window": t.tmux_window,
                 "provider": t.provider,
                 "agent_profile": t.agent_profile,
+                "initial_message": t.initial_message,
                 "last_active": t.last_active,
             }
             for t in terminals

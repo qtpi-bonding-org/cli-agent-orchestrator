@@ -5,7 +5,7 @@ import logging
 from contextlib import asynccontextmanager
 from typing import Annotated, Dict, List, Optional
 
-from fastapi import FastAPI, HTTPException, Path, Query, status
+from fastapi import Body, FastAPI, HTTPException, Path, Query, status
 from pydantic import BaseModel, Field, field_validator
 from watchdog.observers.polling import PollingObserver
 
@@ -135,6 +135,7 @@ async def create_session(
     working_directory: Optional[str] = None,
     delegating_agent_id: Optional[str] = None,
     target_window_name: Optional[str] = None,
+    initial_message: Optional[str] = Body(None, embed=True),
 ) -> Terminal:
     """Create a new session with exactly one terminal."""
     try:
@@ -146,6 +147,7 @@ async def create_session(
             working_directory=working_directory,
             delegating_agent_id=delegating_agent_id,
             target_window_name=target_window_name,
+            initial_message=initial_message,
         )
         return result
 
@@ -207,6 +209,7 @@ async def create_terminal_in_session(
     agent_profile: str,
     working_directory: Optional[str] = None,
     delegating_agent_id: Optional[str] = None,
+    initial_message: Optional[str] = Body(None, embed=True),
 ) -> Terminal:
     """Create additional terminal in existing session."""
     try:
@@ -217,6 +220,7 @@ async def create_terminal_in_session(
             new_session=False,
             working_directory=working_directory,
             delegating_agent_id=delegating_agent_id,
+            initial_message=initial_message,
         )
         return result
     except ValueError as e:
@@ -232,9 +236,7 @@ async def create_terminal_in_session(
 async def list_terminals_in_session(session_name: str) -> List[Dict]:
     """List all terminals in a session."""
     try:
-        from cli_agent_orchestrator.clients.database import list_terminals_by_session
-
-        return list_terminals_by_session(session_name)
+        return terminal_service.list_workers(session_name)
     except Exception as e:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,

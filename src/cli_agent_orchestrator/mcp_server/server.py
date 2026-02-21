@@ -18,6 +18,11 @@ from cli_agent_orchestrator.constants import PUBLIC_URL, DEFAULT_PROVIDER
 from cli_agent_orchestrator.mcp_server.models import HandoffResult
 from cli_agent_orchestrator.models.terminal import TerminalStatus
 from cli_agent_orchestrator.providers.manager import provider_manager
+from cli_agent_orchestrator.services.terminal_service import (
+    create_terminal,
+    get_terminal,
+    list_workers as list_workers_service,
+)
 from cli_agent_orchestrator.utils.terminal import generate_session_name, async_wait_until_terminal_status
 
 logger = logging.getLogger(__name__)
@@ -88,7 +93,7 @@ def _extract_session_id_from_pane(tmux_session_name: str, tmux_window_name: str)
 
 
 def _create_terminal(
-    agent_profile: str, working_directory: Optional[str] = None, session_id: Optional[str] = None
+    agent_profile: str, working_directory: Optional[str] = None, session_id: Optional[str] = None, initial_message: Optional[str] = None
 ) -> Tuple[str, str]:
     """Create a new terminal with the specified agent profile.
 
@@ -159,7 +164,8 @@ def _create_terminal(
                 if working_directory:
                     params["working_directory"] = working_directory
                 
-                response = requests.post(f"{PUBLIC_URL}/sessions/{session_name}/terminals", params=params)
+                json_data = {"initial_message": initial_message} if initial_message else None
+                response = requests.post(f"{PUBLIC_URL}/sessions/{session_name}/terminals", params=params, json=json_data)
                 response.raise_for_status()
                 terminal = response.json()
                 return terminal["id"], provider
@@ -176,7 +182,8 @@ def _create_terminal(
         if working_directory:
             params["working_directory"] = working_directory
 
-        response = requests.post(f"{PUBLIC_URL}/sessions", params=params)
+        json_data = {"initial_message": initial_message} if initial_message else None
+        response = requests.post(f"{PUBLIC_URL}/sessions", params=params, json=json_data)
         response.raise_for_status()
         terminal = response.json()
     elif current_terminal_id:
@@ -207,7 +214,8 @@ def _create_terminal(
         if working_directory:
             params["working_directory"] = working_directory
 
-        response = requests.post(f"{PUBLIC_URL}/sessions/{session_name}/terminals", params=params)
+        json_data = {"initial_message": initial_message} if initial_message else None
+        response = requests.post(f"{PUBLIC_URL}/sessions/{session_name}/terminals", params=params, json=json_data)
         response.raise_for_status()
         terminal = response.json()
     else:
@@ -221,7 +229,8 @@ def _create_terminal(
         if working_directory:
             params["working_directory"] = working_directory
 
-        response = requests.post(f"{PUBLIC_URL}/sessions", params=params)
+        json_data = {"initial_message": initial_message} if initial_message else None
+        response = requests.post(f"{PUBLIC_URL}/sessions", params=params, json=json_data)
         response.raise_for_status()
         terminal = response.json()
 
@@ -314,7 +323,7 @@ async def _handoff_impl(
     try:
         print(f"🎬 [CAO-MCP] Starting Handoff: profile={agent_profile}, directory={working_directory}")
         # Create terminal
-        terminal_id, provider = _create_terminal(agent_profile, working_directory, session_id)
+        terminal_id, provider = _create_terminal(agent_profile, working_directory, session_id, initial_message=message)
         print(f"🆕 [CAO-MCP] Created terminal {terminal_id} ({provider})")
 
         # Get terminal metadata for enriched fields
@@ -556,8 +565,8 @@ def _assign_impl(
 
     try:
         # Create terminal
-        terminal_id, _ = _create_terminal(agent_profile, working_directory, session_id)
-
+        terminal_id, provider = _create_terminal(agent_profile, working_directory, session_id, initial_message=message)
+        
         # Get terminal metadata for enriched fields
         terminal_metadata = get_terminal_metadata(terminal_id)
         if terminal_metadata:
@@ -792,6 +801,38 @@ async def check_inbox(
         return {"success": True, "terminal_id": target_id, "messages": messages, "count": len(messages)}
     except Exception as e:
         print(f"❌ [CAO-MCP] check_inbox Exception: {str(e)}")
+        return {"success": False, "error": str(e)}
+
+
+@mcp.tool()
+async def list_workers(ctx: Context = None) -> Dict[str, Any]:
+    """List active worker agents for the current session.
+
+    Use this tool to discover background subagents, check their status, 
+    and see their initial task assignments (initial_message).
+
+    Returns:
+        Dict with success status and list of workers
+    """
+    print(f"🎬 [CAO-MCP] Tool Call: list_workers")
+    session_id = _get_session_id(ctx)
+    if not session_id:
+        # Fallback: recover session from our own terminal ID if we are a CAO terminal
+        current_id = os.environ.get("CAO_TERMINAL_ID")
+        if current_id:
+            try:
+                term = get_terminal(current_id)
+                session_id = term.get("session_name")
+            except:
+                pass
+
+    if not session_id:
+        return {"success": False, "error": "Could not determine session_id for worker discovery"}
+
+    try:
+        workers = list_workers_service(session_id)
+        return {"success": True, "workers": workers}
+    except Exception as e:
         return {"success": False, "error": str(e)}
 
 
