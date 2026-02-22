@@ -10,3 +10,4 @@ class ProviderType(str, Enum):
     CODEX = "codex"
     OPENCODE = "opencode"
     OPENCODE_ATTACH = "opencode-attach"
+    OPENCODE_API = "opencode-api"
