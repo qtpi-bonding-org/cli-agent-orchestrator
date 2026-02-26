@@ -5,6 +5,7 @@ import json
 import logging
 import os
 import re
+import subprocess
 import time
 from typing import Any, Dict, Optional, Tuple
 
@@ -128,6 +129,10 @@ def _create_terminal(
         terminal_metadata = response.json()
 
         provider = terminal_metadata["provider"]
+        if provider == "opencode-api":
+            provider = "opencode"
+            logger.info(f"Inheriting from opencode-api: forcing subagent to local 'opencode' provider")
+
         session_name = terminal_metadata["session_name"]
 
         # If no working_directory specified, get conductor's current directory
@@ -150,7 +155,12 @@ def _create_terminal(
                 )
 
         # Create new terminal in existing session - always pass working_directory
-        params = {"provider": provider, "agent_profile": agent_profile}
+        params = {
+            "provider": provider, 
+            "agent_profile": agent_profile,
+            "delegating_agent_id": current_terminal_id, # Set for auto-relay
+            "initial_message": initial_message, # Pass initial task for context
+        }
         if working_directory:
             params["working_directory"] = working_directory
     if session_id:
@@ -580,6 +590,18 @@ def _assign_impl(
         # Send message immediately
         _send_direct_input(terminal_id, message)
 
+        # Wait a few seconds to capture subagent_id (OpenCode session ID)
+        # This is critical for the Relay to map the subagent back to the chat.
+        if tmux_session_name and tmux_window_name:
+            print(f"🔍 [CAO-MCP] Polling for subagent_id for {terminal_id}...")
+            poll_start = time.time()
+            while time.time() - poll_start < 5.0:
+                subagent_id = _extract_session_id_from_pane(tmux_session_name, tmux_window_name)
+                if subagent_id:
+                    print(f"✅ [CAO-MCP] Captured subagent_id: {subagent_id}")
+                    break
+                time.sleep(0.5)
+
         print(f"✅ [CAO-MCP] Assign success: terminal_id={terminal_id}")
         return HandoffResult(
             success=True,
@@ -834,6 +856,221 @@ async def list_workers(ctx: Context = None) -> Dict[str, Any]:
         return {"success": True, "workers": workers}
     except Exception as e:
         return {"success": False, "error": str(e)}
+
+
+# --- UNIFIED CAO TOOLS (Discover/Request/Done) ---
+
+@mcp.tool()
+async def cao_mcp_catalog(query: Optional[str] = None) -> str:
+    """Browse or search the Docker MCP Catalog to discover available MCP servers."""
+    try:
+        # Use direct docker binary to bypass shell bridge noise
+        process = subprocess.run(
+            ["docker", "mcp", "catalog", "show", "docker-mcp", "--format", "json"],
+            capture_output=True, text=True, timeout=10
+        )
+        stdout = process.stdout.strip()
+
+        if not stdout:
+            return "The MCP catalog is empty or unreachable."
+
+        catalog = json.loads(stdout)
+        registry = catalog.get("registry", catalog)
+        servers = list(registry.items())
+
+        if query:
+            q = query.lower()
+            filtered = [(name, entry) for name, entry in servers 
+                       if q in name.lower() or (entry.get("description") and q in entry["description"].lower())]
+
+            if not filtered:
+                return f"No MCP servers found matching '{query}'."
+
+            output = f"### Matching MCP Servers ({len(filtered)})\n\n"
+            for name, entry in filtered:
+                output += f"- **{name}**: {entry.get('description', 'No description')}\n"
+            return output
+        else:
+            output = f"### All Available MCP Servers ({len(servers)})\n\n"
+            for name, entry in servers:
+                output += f"- **{name}**: {entry.get('description', 'No description')}\n"
+            return output
+    except Exception as e:
+        logger.error(f"Error browsing MCP catalog: {e}")
+        return f"Failed to browse MCP catalog: {e}"
+
+
+@mcp.tool()
+async def cao_mcp_status() -> str:
+    """Check currently enabled MCP servers in the gateway (live config)."""
+    try:
+        # The file is mounted at fixed path in sandbox Dockerfile
+        with open("/mcp_config/docker-mcp.yaml", "r") as f:
+            config = f.read()
+        return f"Currently enabled MCP servers:\n\n```yaml\n{config}\n```"
+    except Exception:
+        return "No MCP servers are currently enabled (catalog config not found in /mcp_config)."
+
+
+@mcp.tool()
+async def cao_mcp_request(server_name: str, reason: str, ctx: Context = None) -> str:
+    """Research and request a new MCP server to be enabled via PocketBase."""
+    pb_url = os.getenv("POCKETBASE_URL", "http://pocketbase:8090")
+    email = os.getenv("AGENT_EMAIL")
+    password = os.getenv("AGENT_PASSWORD")
+    session_id = _get_session_id(ctx) if ctx else "unknown"
+
+    if not email or not password:
+        return "Error: AGENT_EMAIL/AGENT_PASSWORD not set. Cannot authenticate with PocketBase."
+
+    try:
+        # 1. Authenticate with PocketBase
+        auth_resp = requests.post(f"{pb_url}/api/collections/users/auth-with-password", 
+                                 json={"identity": email, "password": password}, timeout=10)
+        auth_resp.raise_for_status()
+        token = auth_resp.json()["token"]
+
+        # 2. Auto-Research Catalog
+        image = ""
+        config_schema = {}
+        try:
+            process = subprocess.run(
+                ["docker", "mcp", "catalog", "show", "docker-mcp", "--format", "json"],
+                capture_output=True, text=True, timeout=10
+            )
+            stdout = process.stdout.strip()
+            if stdout:
+                catalog = json.loads(stdout)
+                registry = catalog.get("registry", catalog)
+                entry = registry.get(server_name.lower()) or registry.get(server_name)
+                
+                if entry:
+                    image = entry.get("image", "")
+                    # Extract required secrets/envs
+                    for s in entry.get("secrets", []):
+                        if s.get("env"): config_schema[s["env"]] = f"Secret: {s.get('name', s['env'])}"
+                    for e in entry.get("env", []):
+                        if e.get("name"): config_schema[e["name"]] = e.get("value", f"Env: {e['name']}")
+        except:
+            pass # Research is optional best-effort
+
+        # 3. Submit Request
+        req_resp = requests.post(
+            f"{pb_url}/api/pocketcoder/mcp_request",
+            headers={"Authorization": f"Bearer {token}"},
+            json={
+                "server_name": server_name,
+                "reason": reason,
+                "session_id": session_id,
+                "image": image,
+                "config_schema": config_schema
+            },
+            timeout=10
+        )
+        req_resp.raise_for_status()
+        data = req_resp.json()
+        
+        status = data.get("status", "submitted")
+        return f"✅ MCP server '{server_name}' request submitted (ID: {data.get('id')}, status: {status}). Waiting for user dashboard approval."
+    except Exception as e:
+        logger.error(f"MCP request failed: {e}")
+        return f"❌ Failed to submit MCP request: {e}"
+
+
+@mcp.tool()
+async def cao_mcp_inspect(server_name: str, mode: str = "all") -> str:
+    """Inspect an MCP server's tools, configuration requirements, and README.
+    
+    Args:
+        server_name: The name of the MCP server to inspect (e.g., 'n8n', 'mysql')
+        mode: Filter what information to return ('all', 'tools', 'readme', 'config')
+    """
+    try:
+        process = subprocess.run(
+            ["docker", "mcp", "catalog", "show", "docker-mcp", "--format", "json"],
+            capture_output=True, text=True, timeout=10
+        )
+        stdout = process.stdout.strip()
+        if not stdout:
+            return "Failed to retrieve catalog information."
+
+        catalog = json.loads(stdout)
+        registry = catalog.get("registry", catalog)
+        requested_name = server_name.lower()
+
+        # Case-insensitive matching
+        entry_key = next((k for k in registry if k.lower() == requested_name), None)
+        if not entry_key:
+            return f"MCP server '{server_name}' not found in catalog."
+
+        data = registry[entry_key]
+        output = f"### MCP Server: {entry_key}\n\n"
+
+        if mode in ("all", "readme") and data.get("readme"):
+            output += f"#### README\n{data['readme']}\n\n"
+
+        if mode in ("all", "tools") and isinstance(data.get("tools"), list):
+            output += f"#### Tools ({len(data['tools'])})\n"
+            for t in data["tools"]:
+                output += f"- **{t.get('name')}**: {t.get('description', 'No description')}\n"
+                for arg in t.get("arguments", []):
+                    output += f"  - *{arg.get('name')}* ({arg.get('type')}): {arg.get('desc', 'No description')}\n"
+            output += "\n"
+
+        if mode in ("all", "config"):
+            config_schema = {}
+            # Extract secrets/envs from legacy/v2/v3 schemas
+            for s in data.get("secrets", []):
+                if s.get("env"): config_schema[s["env"]] = f"Secret: {s.get('name', s['env'])}"
+            for e in data.get("env", []):
+                if e.get("name"): config_schema[e["name"]] = e.get("value", f"Env: {e['name']}")
+            for c in data.get("config", []):
+                if isinstance(c.get("properties"), dict):
+                    for prop, details in c["properties"].items():
+                        config_schema[prop] = details.get("description", f"Configuration: {prop}")
+
+            if config_schema:
+                output += "#### Configuration Requirements\n"
+                for key, desc in config_schema.items():
+                    output += f"- **{key}**: {desc}\n"
+                output += "\n"
+
+        return output
+    except Exception as e:
+        logger.error(f"Error inspecting MCP server '{server_name}': {e}")
+        return f"Failed to inspect MCP server '{server_name}': {e}"
+
+
+@mcp.tool()
+async def cao_done(message: str, ctx: Context = None) -> str:
+    """Explicitly finish current subagent task and send final results back to Poco."""
+    current_id = os.environ.get("CAO_TERMINAL_ID")
+    if not current_id:
+        return "Error: CAO_TERMINAL_ID not set. This terminal is not being tracked by CAO."
+
+    try:
+        # Find who delegated to us
+        metadata = requests.get(f"{PUBLIC_URL}/terminals/{current_id}").json()
+        supervisor_id = metadata.get("delegating_agent_id")
+
+        if not supervisor_id:
+            # Fallback strategy for session-mapped terminals
+            session_id = _get_session_id(ctx) if ctx else None
+            if session_id:
+                resp = requests.get(f"{PUBLIC_URL}/terminals/by-delegating-agent/{session_id}")
+                if resp.status_code == 200:
+                    supervisor_id = resp.json().get("id")
+
+        if not supervisor_id:
+            return "Error: Could not identify your supervisor terminal (Poco). I don't know who to send results to."
+
+        # Send the results
+        requests.post(f"{PUBLIC_URL}/terminals/{supervisor_id}/input", params={"message": message})
+        
+        return f"✅ Results successfully relayed to supervisor terminal {supervisor_id}. You can now exit."
+    except Exception as e:
+        logger.error(f"cao_done failed: {e}")
+        return f"❌ Failed to relay results: {e}"
 
 
 def main():

@@ -100,7 +100,10 @@ class LogFileHandler(FileSystemEventHandler):
     def _handle_log_change(self, terminal_id: str):
         """Handle log file change and attempt message delivery."""
         try:
-            # Check for pending messages first
+            # 1. Check for Auto-Relay (Worker reporting back to Supervisor)
+            self._handle_auto_relay(terminal_id)
+
+            # 2. Check for pending messages (Supervisor tasking Worker)
             messages = get_pending_messages(terminal_id, limit=1)
             if not messages:
                 logger.debug(f"No pending messages for {terminal_id}, skipping")
@@ -118,3 +121,52 @@ class LogFileHandler(FileSystemEventHandler):
 
         except Exception as e:
             logger.error(f"Error handling log change for {terminal_id}: {e}")
+
+    def _handle_auto_relay(self, terminal_id: str):
+        """Automatically relay COMPLETED results to supervisor if present."""
+        try:
+            provider = provider_manager.get_provider(terminal_id)
+            if not provider:
+                return
+
+            status = provider.get_status(tail_lines=INBOX_SERVICE_TAIL_LINES)
+            if status != TerminalStatus.COMPLETED:
+                return
+
+            # Get metadata to find supervisor (delegating_agent_id)
+            metadata = terminal_service.get_terminal(terminal_id)
+            supervisor_id = metadata.get("delegating_agent_id")
+            
+            if not supervisor_id:
+                return
+
+            # Check if this task result has already been relayed
+            # We use a simple in-memory set to prevent spamming the supervisor
+            # until the worker is assigned a new task.
+            if not hasattr(self, "_relayed_terminals"):
+                self._relayed_terminals = {}
+            
+            # Key on terminal_id + initial_message hash to know if it's the same task
+            current_task_key = f"{terminal_id}:{metadata.get('initial_message', 'none')}"
+            if self._relayed_terminals.get(terminal_id) == current_task_key:
+                return
+
+            logger.info(f"Auto-Relaying results from {terminal_id} to supervisor {supervisor_id}")
+            
+            # Extract final answer
+            output = terminal_service.get_output(
+                terminal_id, mode=terminal_service.OutputMode.LAST
+            )
+            
+            if output and output.strip():
+                # Relay results back to supervisor's input (bridge)
+                # Success = True if the message was accepted by the supervisor's provider
+                terminal_service.send_input(supervisor_id, f"Subagent {terminal_id} results:\n\n{output}")
+                
+                # Mark as relayed for this task
+                self._relayed_terminals[terminal_id] = current_task_key
+            else:
+                logger.warning(f"Terminal {terminal_id} completed but no output extracted")
+
+        except Exception as e:
+            logger.error(f"Auto-relay failed for {terminal_id}: {e}")
