@@ -696,10 +696,9 @@ if ENABLE_WORKING_DIRECTORY:
     ) -> HandoffResult:
         """Assigns a task to another agent without blocking.
 
-        In the message to the worker agent include instruction to send results back via send_message tool.
-        **IMPORTANT**: The terminal id of each agent is available in environment variable CAO_TERMINAL_ID.
-        When assigning, first find out your own CAO_TERMINAL_ID value, then include the terminal_id value in the message to the worker agent to allow callback.
-        Example message: "Analyze the logs. When done, send results back to terminal ee3f93b3 using send_message tool."
+        In the message to the worker agent include instruction to send results back via the cao_done tool.
+        **IMPORTANT**: Tell the worker agent to use the cao_done tool to report back when they are finished. Do NOT pass them a terminal ID, the system will route cao_done automatically.
+        Example message: "Analyze the logs. When done, use the cao_done tool with your findings."
 
         ## Working Directory
 
@@ -735,10 +734,9 @@ else:
     ) -> HandoffResult:
         """Assigns a task to another agent without blocking.
 
-        In the message to the worker agent include instruction to send results back via send_message tool.
-        **IMPORTANT**: The terminal id of each agent is available in environment variable CAO_TERMINAL_ID.
-        When assigning, first find out your own CAO_TERMINAL_ID value, then include the terminal_id value in the message to the worker agent to allow callback.
-        Example message: "Analyze the logs. When done, send results back to terminal ee3f93b3 using send_message tool."
+        In the message to the worker agent include instruction to send results back via the cao_done tool.
+        **IMPORTANT**: Tell the worker agent to use the cao_done tool to report back when they are finished. Do NOT pass them a terminal ID, the system will route cao_done automatically.
+        Example message: "Analyze the logs. When done, use the cao_done tool with your findings."
 
         Args:
             agent_profile: Agent profile for the worker terminal
