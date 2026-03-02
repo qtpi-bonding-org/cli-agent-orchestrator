@@ -50,7 +50,9 @@ class OpenCodeProvider(BaseProvider):
         # Use a heredoc to safely pass multi-line messages with quotes
         # We use 'opencode run' which triggers a full reasoning turn.
         # MANDATORY: The agent profile must be passed to select the correct personna.
-        command = f"opencode run --format json --continue --agent {self._agent_profile} << 'EOF_OPENCODE'\n{message}\nEOF_OPENCODE"
+        # Source LLM keys from the shared volume before each run (keys may change between invocations)
+        env_source = "test -f /llm_keys/llm.env && export $(grep -v '^#' /llm_keys/llm.env | xargs); "
+        command = f"{env_source}opencode run --format json --continue --agent {self._agent_profile} << 'EOF_OPENCODE'\n{message}\nEOF_OPENCODE"
         tmux_client.send_keys(self.session_name, self.window_name, command)
 
     def get_status(self, tail_lines: Optional[int] = None) -> TerminalStatus:
