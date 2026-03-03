@@ -131,7 +131,7 @@ def _create_terminal(
         provider = terminal_metadata["provider"]
         if provider == "opencode-api":
             provider = "opencode"
-            logger.info(f"Inheriting from opencode-api: forcing subagent to local 'opencode' provider")
+            logger.info(f"Inheriting from opencode-api: forcing sandbox agent to local 'opencode' provider")
 
         session_name = terminal_metadata["session_name"]
 
@@ -324,7 +324,7 @@ async def _handoff_impl(
     start_time = time.time()
 
     # Initialize enriched fields
-    subagent_id: Optional[str] = None
+    sandbox_agent_id: Optional[str] = None
     tmux_window_id: Optional[int] = None
     enriched_agent_profile: Optional[str] = None
     tmux_session_name: Optional[str] = None
@@ -354,7 +354,7 @@ async def _handoff_impl(
                 message=f"Terminal {terminal_id} did not reach IDLE status within 30 seconds",
                 output=None,
                 terminal_id=terminal_id,
-                subagent_id=subagent_id,
+                sandbox_agent_id=sandbox_agent_id,
                 tmux_window_id=tmux_window_id,
                 agent_profile=enriched_agent_profile,
             )
@@ -365,12 +365,12 @@ async def _handoff_impl(
         _send_direct_input(terminal_id, message)
 
         # Monitor until completion with timeout.
-        # While waiting, also poll for subagent_id from the pane's JSON event stream.
+        # While waiting, also poll for sandbox_agent_id from the pane's JSON event stream.
         # OpenCode emits {"sessionID": "ses_..."} once it starts — we capture it
         # during the wait rather than as a separate phase, since OpenCode startup
         # can take longer than a fixed poll timeout.
         if tmux_session_name and tmux_window_name:
-            print(f"🔍 [CAO-MCP] Will capture subagent_id during execution wait")
+            print(f"🔍 [CAO-MCP] Will capture sandbox_agent_id during execution wait")
 
         completion_poll_start = time.time()
         while True:
@@ -381,16 +381,16 @@ async def _handoff_impl(
                     message=f"Handoff timed out after {timeout} seconds",
                     output=None,
                     terminal_id=terminal_id,
-                    subagent_id=subagent_id,
+                    sandbox_agent_id=sandbox_agent_id,
                     tmux_window_id=tmux_window_id,
                     agent_profile=enriched_agent_profile,
                 )
 
-            # Try to capture subagent_id if we haven't yet
-            if not subagent_id and tmux_session_name and tmux_window_name:
-                subagent_id = _extract_session_id_from_pane(tmux_session_name, tmux_window_name)
-                if subagent_id:
-                    print(f"✅ [CAO-MCP] Captured subagent_id: {subagent_id}")
+            # Try to capture sandbox_agent_id if we haven't yet
+            if not sandbox_agent_id and tmux_session_name and tmux_window_name:
+                sandbox_agent_id = _extract_session_id_from_pane(tmux_session_name, tmux_window_name)
+                if sandbox_agent_id:
+                    print(f"✅ [CAO-MCP] Captured sandbox_agent_id: {sandbox_agent_id}")
 
             # Check if terminal completed
             provider_instance = provider_manager.get_provider(terminal_id)
@@ -403,11 +403,11 @@ async def _handoff_impl(
 
             await asyncio.sleep(1.0)
 
-        # One final attempt to capture subagent_id after completion
-        if not subagent_id and tmux_session_name and tmux_window_name:
-            subagent_id = _extract_session_id_from_pane(tmux_session_name, tmux_window_name)
-            if subagent_id:
-                print(f"✅ [CAO-MCP] Captured subagent_id (post-completion): {subagent_id}")
+        # One final attempt to capture sandbox_agent_id after completion
+        if not sandbox_agent_id and tmux_session_name and tmux_window_name:
+            sandbox_agent_id = _extract_session_id_from_pane(tmux_session_name, tmux_window_name)
+            if sandbox_agent_id:
+                print(f"✅ [CAO-MCP] Captured sandbox_agent_id (post-completion): {sandbox_agent_id}")
             else:
                 logger.warning(f"sessionID not found in pane output for terminal {terminal_id}")
 
@@ -434,7 +434,7 @@ async def _handoff_impl(
             message=f"Successfully handed off to {agent_profile} ({provider}) in {execution_time:.2f}s",
             output=output,
             terminal_id=terminal_id,
-            subagent_id=subagent_id,
+            sandbox_agent_id=sandbox_agent_id,
             tmux_window_id=tmux_window_id,
             agent_profile=enriched_agent_profile,
         )
@@ -443,7 +443,7 @@ async def _handoff_impl(
         print(f"❌ [CAO-MCP] Handoff Exception: {str(e)}")
         return HandoffResult(
             success=False, message=f"Handoff failed: {str(e)}", output=None, terminal_id=None,
-            subagent_id=subagent_id, tmux_window_id=tmux_window_id, agent_profile=enriched_agent_profile,
+            sandbox_agent_id=sandbox_agent_id, tmux_window_id=tmux_window_id, agent_profile=enriched_agent_profile,
         )
 
 
@@ -566,8 +566,8 @@ def _assign_impl(
     agent_profile: str, message: str, working_directory: Optional[str] = None, session_id: Optional[str] = None
 ) -> HandoffResult:
     """Implementation of assign logic."""
-    # Initialize enriched fields (no wait loop, so no subagent_id capture)
-    subagent_id: Optional[str] = ""
+    # Initialize enriched fields (no wait loop, so no sandbox_agent_id capture)
+    sandbox_agent_id: Optional[str] = ""
     tmux_window_id: Optional[int] = None
     enriched_agent_profile: Optional[str] = None
     tmux_session_name: Optional[str] = None
@@ -590,15 +590,15 @@ def _assign_impl(
         # Send message immediately
         _send_direct_input(terminal_id, message)
 
-        # Wait a few seconds to capture subagent_id (OpenCode session ID)
-        # This is critical for the Relay to map the subagent back to the chat.
+        # Wait a few seconds to capture sandbox_agent_id (OpenCode session ID)
+        # This is critical for the Relay to map the sandbox agent back to the chat.
         if tmux_session_name and tmux_window_name:
-            print(f"🔍 [CAO-MCP] Polling for subagent_id for {terminal_id}...")
+            print(f"🔍 [CAO-MCP] Polling for sandbox_agent_id for {terminal_id}...")
             poll_start = time.time()
             while time.time() - poll_start < 5.0:
-                subagent_id = _extract_session_id_from_pane(tmux_session_name, tmux_window_name)
-                if subagent_id:
-                    print(f"✅ [CAO-MCP] Captured subagent_id: {subagent_id}")
+                sandbox_agent_id = _extract_session_id_from_pane(tmux_session_name, tmux_window_name)
+                if sandbox_agent_id:
+                    print(f"✅ [CAO-MCP] Captured sandbox_agent_id: {sandbox_agent_id}")
                     break
                 time.sleep(0.5)
 
@@ -607,7 +607,7 @@ def _assign_impl(
             success=True,
             message=f"Task assigned to {agent_profile} (terminal: {terminal_id})",
             terminal_id=terminal_id,
-            subagent_id=subagent_id,
+            sandbox_agent_id=sandbox_agent_id,
             tmux_window_id=tmux_window_id,
             agent_profile=enriched_agent_profile,
         )
@@ -618,7 +618,7 @@ def _assign_impl(
             success=False,
             message=f"Assignment failed: {str(e)}",
             terminal_id=None,
-            subagent_id=subagent_id,
+            sandbox_agent_id=sandbox_agent_id,
             tmux_window_id=tmux_window_id,
             agent_profile=enriched_agent_profile,
         )
@@ -792,9 +792,9 @@ async def check_inbox(
     limit: int = Field(default=10, description="Maximum number of messages to retrieve"),
     ctx: Context = None,
 ) -> Dict[str, Any]:
-    """Check inbox for messages from subagents or other terminals.
+    """Check inbox for messages from sandbox agents or other terminals.
 
-    Use this tool when you receive a notification that a subagent has sent you a message,
+    Use this tool when you receive a notification that a sandbox agent has sent you a message,
     or to poll for async task results.
 
     Args:
@@ -828,7 +828,7 @@ async def check_inbox(
 async def list_workers(ctx: Context = None) -> Dict[str, Any]:
     """List active worker agents for the current session.
 
-    Use this tool to discover background subagents, check their status, 
+    Use this tool to discover background sandbox agents, check their status,
     and see their initial task assignments (initial_message).
 
     Returns:
@@ -861,7 +861,7 @@ async def list_workers(ctx: Context = None) -> Dict[str, Any]:
 
 @mcp.tool()
 async def cao_done(message: str, ctx: Context = None) -> str:
-    """Explicitly finish current subagent task and send final results back to Poco."""
+    """Explicitly finish current sandbox agent task and send final results back to Poco."""
     current_id = os.environ.get("CAO_TERMINAL_ID")
     if not current_id:
         return "Error: CAO_TERMINAL_ID not set. This terminal is not being tracked by CAO."

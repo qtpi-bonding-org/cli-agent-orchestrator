@@ -161,7 +161,7 @@ class LogFileHandler(FileSystemEventHandler):
             if output and output.strip():
                 # Relay results back to supervisor's input (bridge)
                 # Success = True if the message was accepted by the supervisor's provider
-                terminal_service.send_input(supervisor_id, f"Subagent {terminal_id} results:\n\n{output}")
+                terminal_service.send_input(supervisor_id, f"Sandbox agent {terminal_id} results:\n\n{output}")
                 
                 # Mark as relayed for this task
                 self._relayed_terminals[terminal_id] = current_task_key

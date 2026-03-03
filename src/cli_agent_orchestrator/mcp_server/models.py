@@ -26,7 +26,7 @@ class HandoffResult(BaseModel):
     message: str = Field(description="A message describing the result of the handoff")
     output: Optional[str] = Field(None, description="The output from the target agent")
     terminal_id: Optional[str] = Field(None, description="The terminal ID used for the handoff")
-    subagent_id: Optional[str] = Field(None, description="The OpenCode session ID of the subagent")
+    sandbox_agent_id: Optional[str] = Field(None, description="The OpenCode session ID of the sandbox agent")
     tmux_window_id: Optional[int] = Field(None, description="The numeric tmux window index")
     agent_profile: Optional[str] = Field(None, description="The agent profile used for the handoff")
 
